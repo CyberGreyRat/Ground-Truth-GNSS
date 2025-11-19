@@ -22,11 +22,13 @@ Dieses Projekt visualisiert genau diese Lücke:
 
 ### 1. Mission Control: Der direkte Vergleich
 Der Herzschlag des Projekts. Ein 3D-Splitscreen, der Theorie und Praxis gegenüberstellt.
-<img width="100%" alt="Splitscreen Orbit Visualisierung" src="https://github.com/user-attachments/assets/f3f92e47-ac4b-42b2-af13-ff3a5af7dccb" />
+<img width="1900" height="942" alt="image" src="https://github.com/user-attachments/assets/94ecf661-0ddc-4e12-b97d-584e9131d7ee" />
+
 
 ### 2. Ground-Tracks: Der Blick von oben
 Die Bodenprojektion der empfangenen Signale. Wo war der Satellit wirklich, als er "Hallo" sagte?
-<img width="100%" alt="Ground Tracker Map" src="https://github.com/user-attachments/assets/217f2fc0-184d-4937-9043-28967918d222" />
+<img width="1893" height="887" alt="image" src="https://github.com/user-attachments/assets/1aa9a900-c90f-4b00-aaa9-52e098f512a1" />
+
 
 ---
 
