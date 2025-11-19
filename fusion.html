@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <title>Sensor Fusion: JSON Orbitals & Live NMEA</title>
+    <style>
+        body { margin: 0; background-color: #000; color: #fff; font-family: monospace; overflow: hidden; }
+        #info { position: absolute; top: 10px; left: 10px; z-index: 100; background: rgba(0,0,0,0.8); padding: 15px; border-radius: 8px; pointer-events: none; }
+        .legend-item { display: flex; align-items: center; margin-bottom: 5px; font-size: 1.1em; }
+        .dot { width: 12px; height: 12px; border-radius: 50%; margin-right: 10px; border: 1px solid #fff; }
+        #status { margin-top: 10px; color: #aaa; }
+    </style>
+    
+    <!-- Three.js & Satellite.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/satellite.js/4.0.0/satellite.min.js"></script>
+</head>
+<body>
+    <div id="info">
+        <h3>GNSS Sensor Fusion</h3>
+        <div class="legend-item"><div class="dot" style="background: #00ff00;"></div>Exakter Orbit (aus galileo.json)</div>
+        <div class="legend-item"><div class="dot" style="background: #ff0000;"></div>Deine Messung (NMEA Az/El)</div>
+        <div id="status">Initialisiere...</div>
+    </div>
+
+    <script>
+        // --- KONFIGURATION ---
+        const YOUR_LAT = 50.6489;
+        const YOUR_LON = 11.3639;
+        const YOUR_ALT = 0.3; // km
+
+        // Globale Speicher
+        let satRecords = {}; // Speichert die Physik-Modelle (Key: "E12")
+        let liveData = [];   // Speichert deine NMEA-Daten
+
+        // --- THREE.JS SETUP ---
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 200000);
+        camera.position.set(0, -30000, 20000); // Blick von schräg unten/aussen
+        
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+        
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+
+        // Die Erde
+        const earth = new THREE.Mesh(
+            new THREE.SphereGeometry(6371, 32, 32),
+            new THREE.MeshPhongMaterial({ 
+                color: 0x112244, 
+                emissive: 0x000022,
+                wireframe: true, 
+                transparent: true, 
+                opacity: 0.8 
+            })
+        );
+        scene.add(earth);
+
+        // Dein Standort (Der "Leuchtturm")
+        const obsGeo = {
+            latitude: satellite.degreesToRadians(YOUR_LAT),
+            longitude: satellite.degreesToRadians(YOUR_LON),
+            height: YOUR_ALT
+        };
+        // Zeichne Standort
+        const obsPos = latLonToVector3(YOUR_LAT, YOUR_LON, 6371);
+        const obsMesh = new THREE.Mesh(new THREE.SphereGeometry(100,8,8), new THREE.MeshBasicMaterial({color: 0xffff00}));
+        obsMesh.position.copy(obsPos);
+        scene.add(obsMesh);
+
+        // Licht
+        const sunLight = new THREE.DirectionalLight(0xffffff, 1.5);
+        sunLight.position.set(10000, 0, 10000);
+        scene.add(sunLight);
+        scene.add(new THREE.AmbientLight(0x404040));
+
+
+        // --- HAUPTFUNKTION: DATEN LADEN & FUSIONIEREN ---
+
+        async function startFusion() {
+            const status = document.getElementById('status');
+            
+            try {
+                // 1. Lade die physikalischen Daten (JSON)
+                status.innerText = "Lade galileo.json...";
+                const jsonResponse = await fetch('galileo.json');
+                const jsonData = await jsonResponse.json();
+                
+                // 2. Verarbeite JSON zu SGP4-Modellen
+                processJsonOrbits(jsonData);
+
+                // 3. Lade deine Live-Daten
+                status.innerText = "Lade NMEA-Daten...";
+                const nmeaResponse = await fetch('get_data.php?range=1h'); // Nur letzte Stunde
+                liveData = await nmeaResponse.json();
+
+                status.innerText = `Fusion aktiv. ${Object.keys(satRecords).length} Orbits, ${liveData.length} Messungen.`;
+
+                // 4. Zeichne alles
+                renderFusion();
+
+            } catch (e) {
+                console.error(e);
+                status.innerText = "Fehler: " + e.message;
+            }
+        }
+
+        // --- SCHRITT 1: JSON VERARBEITEN (Der "Übersetzer") ---
+
+        function processJsonOrbits(data) {
+            data.forEach(sat => {
+                // A. ID extrahieren (Der "Matchmaker")
+                // Wir suchen "GALILEO 12" und machen daraus "E12"
+                let shortId = null;
+                const match = sat.OBJECT_NAME.match(/GALILEO\s+(\d+)/);
+                if (match) {
+                    shortId = "E" + match[1]; // z.B. "E12"
+                } else {
+                    // Fallback für PFM etc.
+                    if (sat.OBJECT_NAME.includes("PFM")) shortId = "E01";
+                    if (sat.OBJECT_NAME.includes("FM2")) shortId = "E02";
+                }
+
+                if (shortId) {
+                    // B. TLE Generieren (JSON -> String -> SGP4)
+                    const tleLines = jsonToTLE(sat);
+                    const satrec = satellite.twoline2satrec(tleLines.line1, tleLines.line2);
+                    
+                    satRecords[shortId] = satrec; // Speichern für später
+                    
+                    // C. Zeichne den perfekten Orbit (Grün)
+                    drawOrbitPath(satrec);
+                }
+            });
+        }
+
+        // Hilfsfunktion: Erstellt TLE-Strings aus deinem JSON
+        // (Damit satellite.js glücklich ist)
+        function jsonToTLE(s) {
+            // Datum formatieren (Epoch)
+            const date = new Date(s.EPOCH);
+            const year = date.getUTCFullYear() % 100;
+            const startOfYear = new Date(Date.UTC(date.getUTCFullYear(), 0, 0));
+            const diff = date - startOfYear;
+            const dayOfYear = diff / (1000 * 60 * 60 * 24);
+            const epochStr = String(year).padStart(2,'0') + dayOfYear.toFixed(8).padStart(12, '0');
+
+            // Werte formatieren
+            const catId = String(s.NORAD_CAT_ID).padStart(5, ' ');
+            const inc = s.INCLINATION.toFixed(4).padStart(8, ' ');
+            const raan = s.RA_OF_ASC_NODE.toFixed(4).padStart(8, ' ');
+            const ecc = s.ECCENTRICITY.toFixed(7).replace('0.', ''); // TLE hat kein "0."
+            const argP = s.ARG_OF_PERICENTER.toFixed(4).padStart(8, ' ');
+            const ma = s.MEAN_ANOMALY.toFixed(4).padStart(8, ' ');
+            const mm = s.MEAN_MOTION.toFixed(8).padStart(11, ' ');
+            const rev = String(s.REV_AT_EPOCH).padStart(5, ' ');
+
+            // Wir faken die Checksumme (satellite.js ist da oft tolerant)
+            const line1 = `1 ${catId}U 99999A   ${epochStr}  .00000000  00000-0  00000-0 0  9990`;
+            const line2 = `2 ${catId} ${inc} ${raan} ${ecc} ${argP} ${ma} ${mm}${rev}0`;
+
+            return { line1, line2 };
+        }
+
+
+        // --- SCHRITT 2: FUSION RENDERN ---
+
+        function renderFusion() {
+            // Wir nehmen den aktuellsten NMEA-Frame
+            if(liveData.length === 0) return;
+            const lastFrame = liveData[liveData.length - 1];
+            
+            // Zeit für die Erdrotation
+            const now = new Date(lastFrame.datetime.replace(' ', 'T'));
+            const gmst = satellite.gstime(now);
+
+            if (Array.isArray(lastFrame.satellites)) {
+                lastFrame.satellites.forEach(mea => {
+                    if (mea.elev <= 0) return; // Unter Horizont
+
+                    // Der FUSION-MOMENT:
+                    // 1. Haben wir ein Physik-Modell für diesen Satelliten?
+                    const satrec = satRecords[mea.id]; // z.B. "E12"
+
+                    if (satrec) {
+                        // JA! Wir haben TLE-Daten.
+                        
+                        // 2. Berechne die WAHRE Position (Grüner Punkt)
+                        const posVel = satellite.propagate(satrec, now);
+                        const posTrue = posVel.position; // ECI (km)
+                        
+                        if (posTrue) {
+                            // Umrechnen ECI -> Three.js (ECI Z ist Oben -> Three Y ist Oben)
+                            // Hier vereinfacht: Wir lassen die Erde so wie sie ist.
+                            
+                            // 3. Berechne die GEMESSENE Position (Roter Punkt)
+                            // Wir nehmen deine Winkel (Az/El)
+                            // Aber wir nehmen den RADIUS aus dem wahren Modell!
+                            
+                            // Beobachter ECI Position
+                            const obsEcf = satellite.geodeticToEcf(obsGeo);
+                            const obsEci = satellite.ecfToEci(obsEcf, gmst);
+                            
+                            // Berechne wahren Abstand (Range)
+                            const satEcf = satellite.eciToEcf(posTrue, gmst);
+                            const lookAngles = satellite.ecfToLookAngles(obsGeo, satEcf);
+                            const trueRangeKm = lookAngles.range; // Der exakte Abstand!
+
+                            // Projiziere deine Messung mit dem wahren Abstand
+                            const posMeasured = calculatePositionFromAzEl(
+                                YOUR_LAT, YOUR_LON, YOUR_ALT,
+                                mea.azim, mea.elev, // DEINE DATEN
+                                trueRangeKm,        // PHYSIK DATEN
+                                gmst
+                            );
+
+                            // Zeichne ROTE Kugel (Messung)
+                            const meshRed = new THREE.Mesh(
+                                new THREE.SphereGeometry(400, 16, 16),
+                                new THREE.MeshBasicMaterial({ color: 0xff0000 })
+                            );
+                            meshRed.position.copy(posMeasured);
+                            scene.add(meshRed);
+
+                            // Zeichne GRÜNE Kugel (Wahrheit)
+                            // (Muss transformiert werden, da ECI rotiert)
+                            // Wir vereinfachen: Wir zeigen nur, ob der Rote Punkt auf der Grünen Linie liegt.
+                            // Die Grüne Linie (Orbit) ist fix im Raum (ECI).
+                            // Unser Roter Punkt ist auch ECI berechnet. Passt.
+                        }
+                    }
+                });
+            }
+        }
+
+        // --- MATHEMATIK (NMEA -> 3D) ---
+        
+        function calculatePositionFromAzEl(lat, lon, alt, az, el, range, gmst) {
+            // 1. Topozentrisch (ENU)
+            const elRad = satellite.degreesToRadians(el);
+            const azRad = satellite.degreesToRadians(az);
+            
+            const x = range * Math.cos(elRad) * Math.sin(azRad);
+            const y = range * Math.cos(elRad) * Math.cos(azRad);
+            const z = range * Math.sin(elRad);
+
+            // 2. ENU zu ECF (Earth-Centered Fixed) - Rotiert mit Erde
+            // Hilfsfunktion für Rotation fehlt in satellite.js, wir machen es manuell:
+            const latRad = satellite.degreesToRadians(lat);
+            const lonRad = satellite.degreesToRadians(lon);
+            
+            const slat = Math.sin(latRad);
+            const clat = Math.cos(latRad);
+            const slon = Math.sin(lonRad);
+            const clon = Math.cos(lonRad);
+
+            const xEcf = -slon*x - slat*clon*y + clat*clon*z + (6371+alt)*clat*clon;
+            const yEcf = clon*x - slat*slon*y + clat*slon*z + (6371+alt)*clat*slon;
+            const zEcf = clat*y + slat*z + (6371+alt)*slat;
+
+            // 3. ECF zu ECI (Inertial) - Der "Sternen-Raum"
+            const posEcf = { x: xEcf, y: yEcf, z: zEcf };
+            const posEci = satellite.ecfToEci(posEcf, gmst);
+
+            return new THREE.Vector3(posEci.x, posEci.y, posEci.z);
+        }
+
+        function drawOrbitPath(satrec) {
+            const points = [];
+            const now = new Date();
+            for (let i = 0; i < 100; i++) {
+                const t = new Date(now.getTime() + i * 10 * 60000); 
+                const pv = satellite.propagate(satrec, t);
+                if (pv.position) points.push(new THREE.Vector3(pv.position.x, pv.position.y, pv.position.z));
+            }
+            const line = new THREE.Line(
+                new THREE.BufferGeometry().setFromPoints(points),
+                new THREE.LineBasicMaterial({ color: 0x00ff00, opacity: 0.3, transparent: true })
+            );
+            scene.add(line);
+        }
+
+        // Loop
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        // Hilfsfunktion für statische Erde-Punkte
+        function latLonToVector3(lat, lon, radius) {
+            const phi = (90 - lat) * (Math.PI / 180);
+            const theta = (lon + 180) * (Math.PI / 180);
+            const x = -(radius * Math.sin(phi) * Math.cos(theta));
+            const z = (radius * Math.sin(phi) * Math.sin(theta));
+            const y = (radius * Math.cos(phi));
+            return new THREE.Vector3(x, y, z);
+        }
+
+        startFusion();
+        animate();
+        
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>

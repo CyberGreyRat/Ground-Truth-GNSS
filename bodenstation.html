@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LIVE 2D Satelliten-Radar (V4.0 / V2.4 API)</title>
+
+    <style>
+        /* (CSS-Basis von index.html) */
+        body {
+            margin: 0;
+            background-color: #000;
+            color: #fff;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        #main-container {
+            display: flex;
+            flex-direction: row;
+            flex-grow: 1;
+            overflow: hidden;
+        }
+
+        /* NEU: 2D-Karten-Container */
+        #map-container {
+            flex-grow: 1;
+            position: relative;
+            background-color: #050a10;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+        }
+
+        #loader {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 200;
+            color: #00ffff;
+            font-size: 1.2em;
+            font-family: 'Courier New', Courier, monospace;
+            text-align: center;
+            padding: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            border-radius: 8px;
+        }
+        #loader.error { color: #ff4d4d; }
+
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 90%;
+            max-width: 600px;
+            text-align: center;
+            z-index: 100;
+            padding: 10px;
+            background-color: rgba(0, 0, 0, 0.6);
+            border-radius: 8px;
+            font-size: 0.9em;
+        }
+        #time-display {
+            margin-top: 5px;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 1.1em;
+            color: #00ffff;
+        }
+
+        #controls {
+            padding: 10px;
+            background-color: #1a1a1a;
+            text-align: center;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            border-top: 1px solid #00ffff;
+        }
+        
+        #controls label { white-space: nowrap; }
+
+        button, select {
+            padding: 5px 10px;
+            font-size: 14px;
+            cursor: pointer;
+            background-color: #333;
+            color: #fff;
+            border: 1px solid #555;
+            border-radius: 4px;
+        }
+        button:hover, select:hover {
+            background-color: #00ffff;
+            color: #000;
+        }
+        progress { width: 100%; margin-top: 10px; }
+
+        /* Seitenleiste (unverändert) */
+        #data-sidebar {
+            width: 380px;
+            flex-shrink: 0;
+            background-color: rgba(10, 20, 30, 0.5);
+            border-left: 1px solid #00ffff;
+            padding: 15px;
+            box-sizing: border-box;
+            font-family: 'Courier New', Courier, monospace;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        #data-sidebar h3 { margin-top: 0; text-align: center; color: #00ffff; text-shadow: 0 0 2px #00ffff; }
+        #satellite-table-container { flex-grow: 1; overflow-y: auto; margin-top: 10px; }
+        #satellite-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+        #satellite-table th, #satellite-table td { padding: 6px; text-align: right; }
+        #satellite-table th { color: #00ffff; border-bottom: 1px solid #00ffff; position: sticky; top: 0; background: #1a1a1a; }
+        #satellite-table td { color: #dddddd; }
+        #satellite-table tr:nth-child(even) { background-color: rgba(0, 255, 255, 0.05); }
+        .legend-color { width: 12px; height: 12px; display: inline-block; margin-right: 5px; border: 1px solid #555; }
+        .legend-flag { margin-right: 5px; }
+
+        /* NEU: Radar-Styling */
+        #radar {
+            position: relative;
+            width: 90vmin; /* 90% der kürzesten Seite (Höhe oder Breite) */
+            height: 90vmin;
+            border-radius: 50%;
+            border: 2px solid rgba(0, 255, 255, 0.3);
+            background: 
+                radial-gradient(circle at center, transparent 0%, transparent 70%, rgba(0, 255, 255, 0.3) 70.5%, transparent 71%),
+                radial-gradient(circle at center, transparent 0%, transparent 40%, rgba(0, 255, 255, 0.3) 40.5%, transparent 41%),
+                radial-gradient(circle at center, transparent 0%, transparent 10%, rgba(0, 255, 255, 0.3) 10.5%, transparent 11%);
+        }
+        /* Horizont-Linien */
+        #radar::before {
+            content: '';
+            position: absolute;
+            width: 100%;
+            height: 2px;
+            background: rgba(0, 255, 255, 0.2);
+            top: 50%;
+            transform: translateY(-50%);
+        }
+        #radar::after {
+            content: '';
+            position: absolute;
+            height: 100%;
+            width: 2px;
+            background: rgba(0, 255, 255, 0.2);
+            left: 50%;
+            transform: translateX(-50%);
+        }
+        
+        /* Himmelsrichtungen-Labels */
+        .direction-label {
+            position: absolute;
+            font-family: 'Courier New', Courier, monospace;
+            color: rgba(0, 255, 255, 0.7);
+            font-size: 1.5vmin;
+        }
+        #label-n { top: 1%; left: 50%; transform: translateX(-50%); }
+        #label-s { bottom: 1%; left: 50%; transform: translateX(-50%); }
+        #label-w { left: 1%; top: 50%; transform: translateY(-50%); }
+        #label-e { right: 1%; top: 50%; transform: translateY(-50%); }
+
+        /* Beobachter-Pfeil (Du) */
+        #observer-dot {
+            position: absolute;
+            width: 0;
+            height: 0;
+            border-left: 0.8vmin solid transparent;
+            border-right: 0.8vmin solid transparent;
+            border-bottom: 1.5vmin solid #ff0000; /* Roter Pfeil nach oben */
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 100;
+        }
+        #observer-label {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, 1.2vmin); /* Unter dem Pfeil */
+            color: #ff0000;
+            font-size: 1.2vmin;
+            font-family: 'Courier New', Courier, monospace;
+        }
+        
+        /* Satelliten-Container */
+        #satellites-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+        
+        .satellite {
+            position: absolute;
+            /* Zentriert das DIV auf seinen (left, top) Koordinaten */
+            transform: translate(-50%, -50%);
+            transition: top 1s linear, left 1s linear; /* Gleitende Bewegung */
+        }
+        
+        .satellite-dot {
+            width: 1vmin;
+            height: 1vmin;
+            border-radius: 50%;
+            background-color: #ffff00; /* Standardfarbe */
+            border: 1px solid #fff;
+            box-shadow: 0 0 1vmin #fff;
+        }
+
+        .satellite-label {
+            color: #fff;
+            font-size: 1vmin;
+            font-family: 'Courier New', Courier, monospace;
+            position: absolute;
+            top: 0;
+            left: 1.5vmin; /* Rechts neben dem Punkt */
+            white-space: nowrap;
+        }
+
+    </style>
+</head>
+<body>
+
+    <!-- UI-Struktur (fast identisch mit index.html) -->
+    <div id="main-container">
+        
+        <!-- NEU: 2D-Karte statt 3D-Canvas -->
+        <div id="map-container">
+            <div id="loader">Lade Daten...</div>
+            <div id="radar">
+                <!-- Himmelsrichtungen -->
+                <div id="label-n" class="direction-label">N</div>
+                <div id="label-s" class="direction-label">S</div>
+                <div id="label-w" class="direction-label">W</div>
+                <div id="label-e" class="direction-label">E</div>
+                
+                <!-- Beobachter-Position (Du) -->
+                <div id="observer-dot"></div>
+                <div id="observer-label">ICH</div>
+                
+                <!-- Satelliten werden hier per JS eingefügt -->
+                <div id="satellites-container"></div>
+            </div>
+
+            <!-- Info-Anzeige (unverändert) -->
+            <div id="info">
+                LIVE 2D Satelliten-Radar | Observer: <span id="latitude">--</span>, <span id="longitude">--</span>
+                <div id="time-display">
+                    <span id="currentTime">--:--:--</span>
+                </div>
+                <progress id="progressBar" value="0" max="100"></progress>
+            </div>
+        </div>
+
+        <!-- Seitenleiste (unverändert) -->
+        <div id="data-sidebar">
+            <h3>SATELLITEN-STATUS</h3>
+            <div id="legend"></div>
+            <div id="satellite-table-container">
+                <table id="satellite-table">
+                    <thead>
+                        <tr>
+                            <th>Sys</th>
+                            <th>ID</th>
+                            <th>Elev</th>
+                            <th>Azim</th>
+                            <th>SNR</th>
+                            <th>Solo</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Steuerung (unverändert) -->
+    <div id="controls">
+        <label for="range-select">Daten laden:</label>
+        <select id="range-select">
+            <option value="1h" selected>Letzte 1 Std</option>
+            <option value="12h">Letzte 12 Std</option>
+            <option value="24h">Letzte 24 Std</option>
+            <option value="7d">Letzte 7 Tage</option>
+            <option value="all">Alle Daten (Downsampled)</option>
+        </select>
+        <button id="load-data-btn">Laden</button>
+        <span style="border-left: 1px solid #555; height: 20px;"></span>
+
+        <button id="play-pause-btn">Play</button>
+        <label for="speed-slider">Speed:</label>
+        <input type="range" id="speed-slider" min="1" max="1000" value="10" step="1">
+        <span id="speed-display">10x</span>
+
+        <label for="time-slider">Zeit (Scrub):</label>
+        <input type="range" id="time-slider" min="0" max="0" value="0" style="width: 25%;">
+    </div>
+
+    <!-- V4.0: JavaScript ohne Three.js -->
+    <script>
+        // ===================================================================================
+        // GLOBALE VARIABLEN
+        // ===================================================================================
+        let satelliteData = [];
+        let satelliteObjects = new Map(); // Speichert HTML-Elemente
+        let isPaused = true;
+        let playbackSpeed = 10;
+        let timeAccumulator = 0;
+        let clock = {
+            startTime: 0,
+            oldTime: 0,
+            elapsedTime: 0,
+            running: false,
+            start: function() {
+                this.startTime = ( performance || Date ).now();
+                this.oldTime = this.startTime;
+                this.running = true;
+            },
+            getDelta: function() {
+                let diff = 0;
+                if ( this.running ) {
+                    const newTime = ( performance || Date ).now();
+                    diff = ( newTime - this.oldTime ) / 1000; // in Sekunden
+                    this.oldTime = newTime;
+                    this.elapsedTime += diff;
+                }
+                return diff;
+            }
+        };
+        let soloModeSatelliteId = null;
+
+        // DOM-Elemente
+        const loaderElement = document.getElementById('loader');
+        const progressBar = document.getElementById('progressBar');
+        const currentTimeEl = document.getElementById('currentTime');
+        const satelliteTableBody = document.querySelector('#satellite-table tbody');
+        const satContainer = document.getElementById('satellites-container');
+
+        const slider = document.getElementById('time-slider');
+        const playPauseBtn = document.getElementById('play-pause-btn');
+        const speedSlider = document.getElementById('speed-slider');
+        const speedDisplay = document.getElementById('speed-display');
+        const loadDataBtn = document.getElementById('load-data-btn');
+        const rangeSelect = document.getElementById('range-select');
+
+        // ===================================================================================
+        // DATENVERARBEITUNG
+        // ===================================================================================
+
+        // Lädt die Daten beim Start
+        document.addEventListener('DOMContentLoaded', () => {
+            setupEventListeners();
+            loadData(); // Lädt '1h' beim Start
+        });
+
+        async function loadData() {
+            const range = rangeSelect.value;
+            loaderElement.textContent = `Lade Daten für "${range}"...`;
+            loaderElement.classList.remove('error');
+            loaderElement.style.display = 'block';
+
+            if (!isPaused) togglePlayPause();
+            removeAllSatellites();
+            satelliteData = [];
+
+            try {
+                // Lade die Live-Daten (identisch zu index.html)
+                const response = await fetch(`get_data.php?range=${range}&t=${new Date().getTime()}`);
+                if (!response.ok) throw new Error(`HTTP-Fehler! Status: ${response.status}`);
+                
+                const data = await response.json();
+                if (data.error) throw new Error(`PHP/SQL Fehler: ${data.error}`);
+
+                loaderElement.style.display = 'none';
+                processJSONData(data);
+
+            } catch (error) {
+                console.error("Fehler beim Laden der Daten:", error);
+                loaderElement.textContent = `Fehler: ${error.message}.`;
+                loaderElement.classList.add('error');
+            }
+        }
+
+        function processJSONData(data) {
+            satelliteData = data;
+
+            if (!satelliteData || satelliteData.length === 0) {
+                console.warn("Keine gültigen Daten vom Server empfangen.");
+                loaderElement.textContent = 'Keine Daten für diesen Zeitraum gefunden.';
+                loaderElement.classList.add('error');
+                loaderElement.style.display = 'block';
+                slider.max = 0;
+                slider.value = 0;
+                progressBar.max = 0;
+                progressBar.value = 0;
+                return;
+            }
+
+            slider.max = satelliteData.length - 1;
+            progressBar.max = satelliteData.length - 1;
+            slider.value = 0;
+            progressBar.value = 0;
+
+            const observerLat = (satelliteData[0]?.lat ?? 0.0);
+            const observerLon = (satelliteData[0]?.lon ?? 0.0);
+            document.getElementById('latitude').innerText = observerLat.toFixed(4);
+            document.getElementById('longitude').innerText = observerLon.toFixed(4);
+
+            updateFrameData(0); // Ersten Frame zeichnen
+            if(isPaused) togglePlayPause(); // Auto-Play
+            
+            console.log(`JSON verarbeitet. ${satelliteData.length} Frames geladen.`);
+        }
+
+        // ===================================================================================
+        // KARTEN- & SATELLITEN-LOGIK (NEU)
+        // ===================================================================================
+
+        /**
+         * Konvertiert Azimut/Elevation in 2D-Radar-Koordinaten (X, Y)
+         * @param {number} azim - Azimut (0-360, 0=Nord)
+         * @param {number} elev - Elevation (0-90, 90=Zenit)
+         * @returns {object} {x, y} als Prozentwerte (0-100)
+         */
+        function azimElevToXY(azim, elev) {
+            // 1. Konvertiere Azimut (0=N, 90=E) in mathematischen Winkel (0=E, 90=N)
+            const azimRad = ( (450 - azim) % 360 ) * Math.PI / 180;
+            
+            // 2. Konvertiere Elevation in Distanz vom Zentrum
+            // 90° = 0% Distanz (Mitte)
+            // 0°  = 100% Distanz (Rand)
+            // Wir nutzen sin(dist), um die Projektion etwas zu verzerren (realistischer)
+            const distPercent = (90 - elev) / 90 * 100;
+
+            // 3. Berechne X und Y
+            // 50% ist der Mittelpunkt (unser Standort)
+            const x = 50 + (distPercent / 100) * 50 * Math.cos(azimRad);
+            const y = 50 - (distPercent / 100) * 50 * Math.sin(azimRad); // Y-Achse ist umgedreht
+            
+            return { x: x, y: y };
+        }
+
+        function createSatellite(satData) {
+            const satElement = document.createElement('div');
+            satElement.className = 'satellite';
+            satElement.id = `sat-${satData.id}`;
+            
+            const dot = document.createElement('div');
+            dot.className = 'satellite-dot';
+            const color = getSatColor(satData.id);
+            dot.style.backgroundColor = color;
+            dot.style.boxShadow = `0 0 1vmin ${color}`;
+
+            const label = document.createElement('div');
+            label.className = 'satellite-label';
+            label.textContent = satData.id;
+            
+            satElement.appendChild(dot);
+            satElement.appendChild(label);
+            satContainer.appendChild(satElement);
+
+            // Tabelle erstellen (identisch zu 3D-Version)
+            const row = satelliteTableBody.insertRow();
+            row.id = `sat-row-${satData.id}`;
+            row.innerHTML = `
+                <td>${getFlag(satData.id)}</td>
+                <td>${satData.id}</td>
+                <td class="elev">--</td>
+                <td class="azim">--</td>
+                <td class="snr">--</td>
+                <td><input type="checkbox" class="solo-check" data-id="${satData.id}"></td>
+            `;
+            row.cells[5].style.textAlign = 'center';
+
+            const satObject = {
+                id: satData.id,
+                element: satElement,
+                tableRow: row,
+                framesSinceDisappeared: 0
+            };
+            satelliteObjects.set(satData.id, satObject);
+            return satObject;
+        }
+        
+        function removeSatellite(id) {
+            if (satelliteObjects.has(id)) {
+                const so = satelliteObjects.get(id);
+                so.element.remove();
+                so.tableRow.remove();
+                satelliteObjects.delete(id);
+            }
+        }
+
+        function removeAllSatellites() {
+            satelliteObjects.forEach(so => {
+                so.element.remove();
+                so.tableRow.remove();
+            });
+            satelliteObjects.clear();
+            satelliteTableBody.innerHTML = '';
+        }
+
+
+        // ===================================================================================
+        // EVENT-LISTENER & HILFSFUNKTIONEN
+        // ===================================================================================
+
+        function setupEventListeners() {
+            loadDataBtn.addEventListener('click', () => loadData());
+
+            slider.addEventListener('input', (e) => {
+                if (!isPaused) togglePlayPause();
+                updateFrameData(parseInt(e.target.value));
+            });
+            playPauseBtn.addEventListener('click', togglePlayPause);
+
+            speedSlider.addEventListener('input', (e) => {
+                let val = parseInt(e.target.value);
+                if (val <= 100) {
+                    playbackSpeed = val;
+                    speedDisplay.textContent = `${val}x`;
+                } else if (val <= 900) { 
+                    let scaled = Math.round(val / 10) * 10;
+                    playbackSpeed = scaled;
+                    speedDisplay.textContent = `${scaled}x`;
+                } else { 
+                    playbackSpeed = 1000;
+                    speedDisplay.textContent = `1000x`;
+                }
+            });
+
+            // Solo-Modus (identisch)
+            satelliteTableBody.addEventListener('click', (e) => {
+                if (e.target.classList.contains('solo-check')) {
+                    const checkbox = e.target;
+                    const satId = checkbox.dataset.id;
+                    if (checkbox.checked) {
+                        soloModeSatelliteId = satId;
+                        satelliteTableBody.querySelectorAll('.solo-check').forEach(cb => {
+                            if (cb !== checkbox) cb.checked = false;
+                        });
+                    } else {
+                        soloModeSatelliteId = null;
+                    }
+                }
+            });
+
+            window.addEventListener('resize', onWindowResize, false);
+        }
+
+        function togglePlayPause() {
+            isPaused = !isPaused;
+            playPauseBtn.textContent = isPaused ? "Play" : "Pause";
+            if(isPaused) {
+                clock.running = false;
+            } else {
+                clock.start();
+            }
+        }
+
+        // Hilfsfunktionen (Farben, Flaggen)
+        function getSatColor(system) {
+            if (system.startsWith('G')) return '#00ff00'; // Grün
+            if (system.startsWith('R')) return '#ff0000'; // Rot
+            if (system.startsWith('C')) return '#00aaff'; // Blau
+            if (system.startsWith('E')) return '#ffff00'; // Gelb
+            return '#ffffff'; // Weiß
+        }
+        function getFlag(system) {
+            if (system.startsWith('G')) return '🇺🇸';
+            if (system.startsWith('R')) return '🇷🇺';
+            if (system.startsWith('C')) return '🇨🇳';
+            if (system.startsWith('E')) return '🇪🇺';
+            return '🛰️';
+        }
+        
+        function onWindowResize() {
+            // (Nicht mehr nötig, da Radar 'vmin' nutzt und sich automatisch anpasst)
+        }
+
+        // ===================================================================================
+        // HAUPT-UPDATE-FUNKTION (ANIMATE)
+        // ===================================================================================
+
+        function updateFrameData(index) {
+            if (index < 0 || index >= satelliteData.length) return;
+
+            const currentFrame = satelliteData[index];
+            if (!currentFrame || !currentFrame.satellites || !currentFrame.datetime) {
+                console.warn(`Frame-Daten für Index ${index} sind ungültig.`);
+                return;
+            }
+
+            currentTimeEl.textContent = currentFrame.datetime;
+            progressBar.value = index;
+
+            const frameSatellites = new Map();
+            if (Array.isArray(currentFrame.satellites)) {
+                currentFrame.satellites.forEach(s => {
+                    frameSatellites.set(s.id, s);
+                });
+            }
+
+            frameSatellites.forEach(satData => {
+                let so = satelliteObjects.get(satData.id);
+
+                // 1. Prüfen, ob Satellit unter Horizont
+                if (satData.elev <= 0) {
+                    if (so) removeSatellite(satData.id); 
+                    return;
+                }
+
+                // 2. Satellit neu erstellen, falls nötig
+                if (!so) {
+                    so = createSatellite(satData);
+                }
+
+                // 3. Position aktualisieren
+                so.framesSinceDisappeared = 0;
+                so.element.style.display = '';
+                
+                const { x, y } = azimElevToXY(satData.azim, satData.elev);
+                so.element.style.left = `${x}%`;
+                so.element.style.top = `${y}%`;
+                
+                // 4. Tabelle aktualisieren
+                so.tableRow.style.color = '#ddd';
+                so.tableRow.cells[2].textContent = `${satData.elev}°`;
+                so.tableRow.cells[3].textContent = `${satData.azim}°`;
+                so.tableRow.cells[4].textContent = satData.snr;
+            });
+
+            // 5. "Müllabfuhr" & Solo-Modus
+            satelliteObjects.forEach(so => {
+                // Prüft, ob Satellit NICHT aktualisiert wurde
+                if (!frameSatellites.has(so.id)) {
+                    so.framesSinceDisappeared++;
+                    if (so.framesSinceDisappeared > 5) { // Ausblenden nach 5 Frames
+                        so.element.style.display = 'none';
+                        so.tableRow.style.color = '#777';
+                    }
+                    if (so.framesSinceDisappeared > 300) { // Entfernen nach 300 Frames
+                        removeSatellite(so.id);
+                    }
+                }
+
+                // Solo-Modus-Sichtbarkeit
+                if (soloModeSatelliteId !== null) {
+                    if (so.id !== soloModeSatelliteId) {
+                        so.element.style.display = 'none';
+                    } else {
+                        so.element.style.display = ''; // Solo-Satellit immer zeigen
+                    }
+                }
+            });
+        }
+
+        // Animate-Funktion (nur für Playback)
+        function animate() {
+            requestAnimationFrame(animate);
+            if (isPaused || satelliteData.length === 0) return;
+
+            const deltaTime = clock.getDelta();
+            timeAccumulator += deltaTime;
+            const timePerFrame = 1.0 / playbackSpeed;
+
+            while (timeAccumulator >= timePerFrame) {
+                timeAccumulator -= timePerFrame;
+                let newIndex = parseInt(slider.value) + 1;
+                if (newIndex >= satelliteData.length) {
+                    newIndex = 0;
+                }
+                slider.value = newIndex;
+                updateFrameData(newIndex);
+            }
+        }
+        
+        // Starte die Animate-Schleife
+        animate();
+
+    </script>
+</body>
+</html>

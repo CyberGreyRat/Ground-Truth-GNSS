@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html lang="de">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Mission Control: Splitscreen</title>
+    <style>
+        body {
+            margin: 0;
+            background-color: #000;
+            color: #fff;
+            font-family: 'Courier New', sans-serif;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        /* Oben: 3D Bereich */
+        #canvas-container {
+            flex-grow: 1;
+            position: relative;
+            width: 100%;
+            overflow: hidden;
+        }
+
+        /* Labels */
+        .screen-label {
+            position: absolute;
+            top: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 5px 15px;
+            border: 1px solid #00ffff;
+            color: #00ffff;
+            font-weight: bold;
+            pointer-events: none;
+            z-index: 5;
+        }
+
+        #label-left {
+            left: 20px;
+            border-color: #00ff00;
+            color: #00ff00;
+        }
+
+        #label-right {
+            right: 20px;
+            border-color: #ff00ff;
+            color: #ff00ff;
+        }
+
+        /* Unten: UI Bereich */
+        #ui-container {
+            height: 250px;
+            background-color: #111;
+            border-top: 2px solid #444;
+            display: flex;
+            flex-direction: column;
+            padding: 10px;
+            box-sizing: border-box;
+            z-index: 10;
+        }
+
+        /* Filter Leiste */
+        #controls-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            border-bottom: 1px solid #333;
+            padding-bottom: 10px;
+        }
+
+        #filter-buttons {
+            display: flex;
+            gap: 10px;
+        }
+
+        .btn {
+            background: #222;
+            border: 1px solid #555;
+            color: #aaa;
+            padding: 8px 15px;
+            cursor: pointer;
+            font-family: inherit;
+            text-transform: uppercase;
+            transition: 0.2s;
+        }
+
+        .btn:hover {
+            background: #333;
+            color: #fff;
+            border-color: #fff;
+        }
+
+        .btn.active {
+            background: #444;
+            color: #fff;
+            border-color: #00ffff;
+            font-weight: bold;
+        }
+
+        .btn-track {
+            border-color: #ff9900;
+            color: #ff9900;
+            text-decoration: none;
+            display: inline-block;
+            padding: 8px 15px;
+            background: #222;
+        }
+
+        .btn-track:hover {
+            background: #ff9900;
+            color: #000;
+        }
+
+        /* Liste */
+        #sat-list-wrapper {
+            flex-grow: 1;
+            overflow-y: auto;
+            background: #000;
+            border: 1px solid #333;
+        }
+
+        #sat-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 1px;
+        }
+
+        #sat-list li {
+            padding: 5px 10px;
+            background: #1a1a1a;
+            border-bottom: 1px solid #333;
+            font-size: 12px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+        }
+
+        #sat-list li:hover {
+            background: #333;
+            color: #fff;
+        }
+
+        #sat-list li span.sys-marker {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            margin-right: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        /* Loader */
+        #loader {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.8);
+            color: #00ffff;
+            padding: 20px;
+            border: 1px solid #00ffff;
+            z-index: 20;
+        }
+
+        /* Dashboard Style für die Liste */
+        #sat-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 5px;
+            padding: 5px;
+        }
+
+        .sat-card {
+            background: #1a1a1a;
+            border: 1px solid #333;
+            padding: 10px;
+            font-size: 11px;
+            font-family: 'Courier New', monospace;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .sat-card:hover {
+            background: #222;
+            border-color: #555;
+        }
+
+        .sat-header {
+            font-weight: bold;
+            color: #fff;
+            display: flex;
+            justify-content: space-between;
+            border-bottom: 1px solid #444;
+            padding-bottom: 2px;
+            margin-bottom: 2px;
+        }
+
+        .sat-row {
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .val-gnss {
+            color: #00ff00;
+        }
+
+        /* Links: Echt */
+        .val-orbit {
+            color: #ff00ff;
+        }
+
+        /* Rechts: Dein Modell */
+        .val-diff {
+            font-weight: bold;
+        }
+
+        .diff-ok {
+            color: #00ff00;
+        }
+
+        .diff-bad {
+            color: #ff0000;
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+</head>
+
+<body>
+
+    <div id="canvas-container">
+        <div id="label-left" class="screen-label">DATA FROM 18.11.2025 https://celestrak.org/NORAD/elements/</div>
+        <div id="label-right" class="screen-label">ORBITS gem. vom 11.11.2025-18.11.2025</div>
+        <div id="loader">Initialisiere Systeme...</div>
+    </div>
+
+    <div id="ui-container">
+        <div id="controls-header">
+            <div id="filter-buttons">
+                <button class="btn active" onclick="setFilter('ALL')">ALLE</button>
+                <button class="btn" onclick="setFilter('GPS')">GPS 🇺🇸</button>
+                <button class="btn" onclick="setFilter('GLO')">GLONASS 🇷🇺</button>
+                <button class="btn" onclick="setFilter('GAL')">GALILEO 🇪🇺</button>
+                <button class="btn" onclick="setFilter('BDS')">BEIDOU 🇨🇳</button>
+            </div>
+            <div>
+                <a href="get_data_straight.html" class="btn-track">🗺️ GROUND-TRACKS</a>
+            </div>
+        </div>
+        <div id="sat-list-wrapper">
+            <ul id="sat-list">
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        // --- KONFIGURATION ---
+        const EARTH_RADIUS = 5;
+        const GM = 398600.4418; // Gravitationskonstante
+        const SCALE = EARTH_RADIUS / 6371; // Skalierung km zu 3D Units
+        const SIMULATION_SPEED = 200; // Multiplikator für Zeit (kleiner = langsamer)
+
+        // Globale Variablen
+        let renderer, camera, controls;
+        let sceneLeft, sceneRight;
+        let earthLeft, earthRight;
+        let satellitesLeft = []; // Kepler Objekte
+        let satellitesRight = []; // Orbit Pfad Objekte
+        let clock = new THREE.Clock();
+
+        let currentFilter = 'ALL';
+
+        // --- INIT ---
+        async function init() {
+            const container = document.getElementById('canvas-container');
+
+            // 1. Renderer Setup für Splitscreen
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(container.clientWidth, container.clientHeight);
+            renderer.setScissorTest(true);
+            container.appendChild(renderer.domElement);
+
+            // 2. Gemeinsame Kamera - WICHTIG: Aspect Ratio für halben Screen berechnen!
+            // Wir teilen die Breite durch 2, da jeder Screen nur die Hälfte nutzt.
+            const aspect = (container.clientWidth / 2) / container.clientHeight;
+            camera = new THREE.PerspectiveCamera(45, aspect, 0.1, 1000);
+            camera.position.set(0, 25, 60);
+
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+
+            // 3. Szenen erstellen
+            sceneLeft = new THREE.Scene();
+            sceneLeft.background = new THREE.Color(0x020202);
+
+            sceneRight = new THREE.Scene();
+            sceneRight.background = new THREE.Color(0x100010);
+
+            // Beleuchtung
+            addLights(sceneLeft);
+            addLights(sceneRight);
+
+            // 4. Erde laden
+            const loader = document.getElementById('loader');
+            const gltfLoader = new THREE.GLTFLoader();
+
+            try {
+                const earthGltf = await gltfLoader.loadAsync('earth.glb');
+
+                // Erde Links
+                earthLeft = earthGltf.scene.clone();
+                earthLeft.scale.set(EARTH_RADIUS, EARTH_RADIUS, EARTH_RADIUS);
+                earthLeft.rotation.z = -23.4 * (Math.PI / 180);
+                sceneLeft.add(earthLeft);
+
+                // Erde Rechts
+                earthRight = earthGltf.scene.clone();
+                earthRight.scale.set(EARTH_RADIUS, EARTH_RADIUS, EARTH_RADIUS);
+                earthRight.rotation.z = -23.4 * (Math.PI / 180);
+                sceneRight.add(earthRight);
+
+            } catch (e) {
+                console.warn("Earth.glb nicht gefunden, nutze Wireframe.");
+                const geo = new THREE.SphereGeometry(EARTH_RADIUS, 16, 16);
+                const mat = new THREE.MeshBasicMaterial({ wireframe: true, color: 0x0044ff });
+                earthLeft = new THREE.Mesh(geo, mat); sceneLeft.add(earthLeft);
+                earthRight = new THREE.Mesh(geo, mat); sceneRight.add(earthRight);
+            }
+
+            // 5. Daten Laden
+            loader.innerText = "Lade GNSS & Orbits...";
+
+            Promise.all([
+                fetch('gnss.json').then(r => r.json()),
+                fetch('orbits.json').then(r => r.json())
+            ]).then(([gnssData, orbitsData]) => {
+                processGNSSData(gnssData); // Links
+                processOrbitData(orbitsData); // Rechts
+                updateUI();
+                loader.style.display = 'none';
+            }).catch(err => {
+                console.error(err);
+                loader.innerText = "Fehler beim Laden der JSON Dateien. (Check Console)";
+            });
+
+            window.addEventListener('resize', onResize);
+            animate();
+        }
+
+        function addLights(scene) {
+            scene.add(new THREE.AmbientLight(0x666666));
+            const dir = new THREE.DirectionalLight(0xffffff, 1.5);
+            dir.position.set(50, 30, 50);
+            scene.add(dir);
+        }
+
+        // --- LOGIK LINKS (Kepler) ---
+        function processGNSSData(data) {
+            data.forEach(satData => {
+                const info = identifySystem(satData.OBJECT_NAME);
+
+                // Kepler Parameter extrahieren
+                const n_rad_s = satData.MEAN_MOTION * (2 * Math.PI) / 86400;
+                const a = Math.cbrt(GM / (n_rad_s * n_rad_s));
+
+                const kepler = {
+                    a: a,
+                    e: satData.ECCENTRICITY,
+                    i: satData.INCLINATION * (Math.PI / 180),
+                    raan: satData.RA_OF_ASC_NODE * (Math.PI / 180),
+                    argPe: satData.ARG_OF_PERICENTER * (Math.PI / 180),
+                    ma: satData.MEAN_ANOMALY * (Math.PI / 180),
+                    n: satData.MEAN_MOTION
+                };
+
+                // 1. Orbit Linie berechnen (NEU: Jetzt auch links!)
+                const linePoints = [];
+                const segments = 100;
+                for (let j = 0; j <= segments; j++) {
+                    // Einmal komplett rum (0 bis 2PI)
+                    const trueAnomaly = (j / segments) * 2 * Math.PI;
+                    const pos = calculatePositionFromKepler(kepler, trueAnomaly);
+                    linePoints.push(pos);
+                }
+                const lineGeo = new THREE.BufferGeometry().setFromPoints(linePoints);
+                const lineMat = new THREE.LineBasicMaterial({ color: info.color, opacity: 0.3, transparent: true });
+                const orbitLine = new THREE.LineLoop(lineGeo, lineMat);
+                sceneLeft.add(orbitLine);
+
+                // 2. Satelliten Mesh
+                const geo = new THREE.SphereGeometry(0.15, 8, 8);
+                const mat = new THREE.MeshBasicMaterial({ color: info.color });
+                const mesh = new THREE.Mesh(geo, mat);
+
+                sceneLeft.add(mesh);
+
+                satellitesLeft.push({
+                    mesh: mesh,
+                    line: orbitLine,
+                    kepler: kepler,
+                    sys: info.sys,
+                    name: satData.OBJECT_NAME,
+                    color: info.color
+                });
+            });
+        }
+
+        // Hilfsfunktion: Kepler -> XYZ
+        function calculatePositionFromKepler(kepler, trueAnomaly) {
+            // Radius in Orbit-Ebene
+            const r = (kepler.a * SCALE * (1 - kepler.e * kepler.e)) / (1 + kepler.e * Math.cos(trueAnomaly));
+
+            // Koordinaten in Orbit-Ebene
+            const x_orb = r * Math.cos(trueAnomaly);
+            const y_orb = r * Math.sin(trueAnomaly);
+
+            // Rotationen
+            const cosP = Math.cos(kepler.argPe); const sinP = Math.sin(kepler.argPe);
+            const x1 = x_orb * cosP - y_orb * sinP;
+            const y1 = x_orb * sinP + y_orb * cosP;
+
+            const cosI = Math.cos(kepler.i); const sinI = Math.sin(kepler.i);
+            const x2 = x1;
+            const y2 = y1 * cosI;
+            const z2 = y1 * sinI;
+
+            const cosO = Math.cos(kepler.raan); const sinO = Math.sin(kepler.raan);
+            const X = x2 * cosO - y2 * sinO;
+            const Y = x2 * sinO + y2 * cosO;
+            const Z = z2;
+
+            // ThreeJS Mapping (Y ist oben in ThreeJS, Z ist oft Nordpol in Astro)
+            // Wir mappen Astro-Z auf Three-Y
+            return new THREE.Vector3(X, Z, -Y);
+        }
+
+        // --- LOGIK RECHTS (Pfade) ---
+        function processOrbitData(data) {
+            const orbits = data.orbits || data;
+
+            orbits.forEach(orbitData => {
+                let sys = 'OTHER';
+                const id = orbitData.sat_id || "UNK";
+                if (id.startsWith('G')) sys = 'GPS';
+                else if (id.startsWith('R')) sys = 'GLO';
+                else if (id.startsWith('E')) sys = 'GAL';
+                else if (id.startsWith('C')) sys = 'BDS';
+
+                const color = orbitData.color || getColorForSys(sys);
+
+                // 1. Orbit Linie
+                const points = [];
+                const startVec = new THREE.Vector3(orbitData.startPoint.x, orbitData.startPoint.y, orbitData.startPoint.z);
+                // FIX: Wenn ein Radius in der JSON steht, überschreibe die Entfernung!
+                if (orbitData.radius) {
+                    // Wir behalten die Richtung (Winkel), ändern aber die Länge auf den Radius
+                    startVec.normalize().multiplyScalar(orbitData.radius);
+                }
+                const normalVec = new THREE.Vector3(orbitData.normal.x, orbitData.normal.y, orbitData.normal.z).normalize();
+
+                for (let i = 0; i <= 80; i++) {
+                    const angle = (i / 80) * Math.PI * 2;
+                    points.push(startVec.clone().applyAxisAngle(normalVec, angle));
+                }
+                const lineGeo = new THREE.BufferGeometry().setFromPoints(points);
+                const lineMat = new THREE.LineBasicMaterial({ color: color, opacity: 0.4, transparent: true });
+                const line = new THREE.Line(lineGeo, lineMat);
+                sceneRight.add(line);
+
+                // 2. Satellit Mesh
+                const satGeo = new THREE.SphereGeometry(0.18, 8, 8);
+                const satMat = new THREE.MeshBasicMaterial({ color: color });
+                const mesh = new THREE.Mesh(satGeo, satMat);
+                mesh.position.copy(startVec);
+                sceneRight.add(mesh);
+
+                // Geschwindigkeit
+                let angVel = orbitData.angular_velocity;
+                if (!angVel || angVel === 0) angVel = 0.000145;
+
+                satellitesRight.push({
+                    mesh: mesh,
+                    line: line,
+                    sys: sys,
+                    name: id,
+                    dataRaw: orbitData, // <--- DIESE ZEILE HINZUFÜGEN (Speichert die rohe JSON für Zugriff)
+                    startPoint: startVec,
+                    normal: normalVec,
+                    angVel: angVel,
+                    offset: Math.random() * Math.PI * 2
+                });
+            });
+        }
+
+        // --- HELPER ---
+        function identifySystem(name) {
+            name = name.toUpperCase();
+            if (name.includes('GPS')) return { sys: 'GPS', color: 0x00ff00 };
+            if (name.includes('GLONASS') || name.includes('COSMOS')) return { sys: 'GLO', color: 0xff0000 };
+            if (name.includes('GALILEO') || name.includes('GSAT')) return { sys: 'GAL', color: 0xffff00 };
+            if (name.includes('BEIDOU')) return { sys: 'BDS', color: 0x0055ff };
+            return { sys: 'OTHER', color: 0xaaaaaa };
+        }
+
+        function getColorForSys(sys) {
+            if (sys === 'GPS') return 0x00ff00;
+            if (sys === 'GLO') return 0xff0000;
+            if (sys === 'GAL') return 0xffff00;
+            if (sys === 'BDS') return 0x0055ff;
+            return 0xaaaaaa;
+        }
+
+        // --- FILTER & UI ---
+        window.setFilter = function (sys) {
+            currentFilter = sys;
+
+            document.querySelectorAll('.btn').forEach(b => b.classList.remove('active'));
+            event.target.classList.add('active');
+
+            // Links
+            satellitesLeft.forEach(sat => {
+                const visible = (sys === 'ALL' || sat.sys === sys);
+                sat.mesh.visible = visible;
+                if (sat.line) sat.line.visible = visible;
+            });
+
+            // Rechts
+            satellitesRight.forEach(sat => {
+                const visible = (sys === 'ALL' || sat.sys === sys);
+                sat.mesh.visible = visible;
+                sat.line.visible = visible;
+            });
+
+            updateUI();
+        }
+
+        // --- NEUE UI LOGIK ---
+
+        function updateUI() {
+            const list = document.getElementById('sat-list');
+            list.innerHTML = '';
+
+            // Wir gehen durch die GNSS (Live) Satelliten, da diese die Referenz sind
+            const satellitesToShow = satellitesLeft.filter(s => s.mesh.visible);
+
+            satellitesToShow.forEach(satLeft => {
+                // 1. Daten berechnen (GNSS)
+                // Radius (Große Halbachse) in km
+                const altLeftKm = satLeft.kepler.a - 6371;
+
+                // 2. Partner finden (Orbit Modell)
+                const satRight = findPartnerSat(satLeft.name, satLeft.sys);
+
+                let altRightKm = "---";
+                let signalStr = "N/A";
+                let diffKm = 0;
+                let diffClass = "";
+
+                if (satRight) {
+                    // Radius aus der aktuellen 3D Position zurückrechnen in km
+                    // Formel: (ThreeJS_Units / SCALE) - Erdradius
+                    const currentPos = satRight.mesh.position.length();
+                    const r_km = currentPos / SCALE;
+                    altRightKm = (r_km - 6371).toFixed(0);
+
+                    // Signalstärke (fiktiv aus orbits.json oder berechnet)
+                    // Falls du ein Feld "signal_strength" in deiner JSON hast:
+                    signalStr = satRight.dataRaw.signal_strength || Math.floor(Math.random() * 100) + "%";
+
+                    // Differenz berechnen
+                    diffKm = Math.abs(altLeftKm - (r_km - 6371));
+                    diffClass = diffKm < 500 ? "diff-ok" : "diff-bad"; // Grün wenn < 500km Abweichung
+                }
+
+                // 3. HTML Karte bauen
+                const li = document.createElement('li');
+                li.className = 'sat-card';
+                li.style.borderLeft = `3px solid #${satLeft.color.toString(16).padStart(6, '0')}`;
+
+                li.innerHTML = `
+            <div class="sat-header">
+                <span>${satLeft.name}</span>
+                <span>${satLeft.sys}</span>
+            </div>
+            <div class="sat-row">
+                <span>Alt (GNSS):</span>
+                <span class="val-gnss">${altLeftKm.toFixed(0)} km</span>
+            </div>
+            <div class="sat-row">
+                <span>Alt (Modell):</span>
+                <span class="val-orbit">${altRightKm} km</span>
+            </div>
+            <div class="sat-row">
+                <span>Differenz:</span>
+                <span class="val-diff ${diffClass}">${satRight ? diffKm.toFixed(0) : '-'} km</span>
+            </div>
+            <div class="sat-row">
+                <span>Signal:</span>
+                <span>${signalStr}</span>
+            </div>
+        `;
+                list.appendChild(li);
+            });
+        }
+
+        // Helper: Versucht den passenden Satelliten rechts zu finden
+        function findPartnerSat(gnssName, sys) {
+            // Extrahiere die Nummer (z.B. aus "PRN 13" -> "13" oder "C04" -> "4")
+            const match = gnssName.match(/(\d+)/);
+            if (!match) return null;
+            const number = parseInt(match[0]);
+
+            // Suche in satellitesRight nach dieser Nummer und dem gleichen System
+            return satellitesRight.find(s => {
+                // Check System
+                if (s.sys !== sys) return false;
+
+                // Check Nummer im Namen (z.B. "G13")
+                const sMatch = s.name.match(/(\d+)/);
+                if (!sMatch) return false;
+                return parseInt(sMatch[0]) === number;
+            });
+        }
+
+        // --- ANIMATION ---
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+
+            // Zeit in Sekunden seit Start abrufen
+            const elapsedTime = clock.getElapsedTime();
+
+            // 1. Update Links (Kepler - Physik)
+            satellitesLeft.forEach(sat => {
+                if (!sat.mesh.visible) return;
+
+                // Bewegung basierend auf Mean Motion (n)
+                // n ist in rad/s. Wir multiplizieren mit der verstrichenen Zeit und Speed-Faktor
+                const deltaM = sat.kepler.n * (2 * Math.PI / 86400) * (elapsedTime * SIMULATION_SPEED);
+
+                let M = sat.kepler.ma + deltaM;
+
+                // Löse Kepler Gleichung M = E - e sin(E) für E
+                let E = M;
+                for (let i = 0; i < 5; i++) E = M + sat.kepler.e * Math.sin(E);
+
+                // Wahre Anomalie v
+                const v = 2 * Math.atan(Math.sqrt((1 + sat.kepler.e) / (1 - sat.kepler.e)) * Math.tan(E / 2));
+
+                const pos = calculatePositionFromKepler(sat.kepler, v);
+                sat.mesh.position.copy(pos);
+            });
+
+            // 2. Update Rechts (Einfache Rotation)
+            satellitesRight.forEach(sat => {
+                if (!sat.mesh.visible) return;
+                // Winkel = Zeit * Geschw * Faktor + Offset
+                const angle = (elapsedTime * sat.angVel * SIMULATION_SPEED) + sat.offset;
+
+                sat.mesh.position.copy(sat.startPoint).applyAxisAngle(sat.normal, angle);
+                sat.mesh.lookAt(earthRight.position);
+            });
+
+            renderSplitScreen();
+        }
+
+        function renderSplitScreen() {
+            const width = renderer.domElement.width;
+            const height = renderer.domElement.height;
+
+            // LINKS RENDERN
+            renderer.setScissor(0, 0, width / 2, height);
+            renderer.setViewport(0, 0, width / 2, height);
+            renderer.render(sceneLeft, camera);
+
+            // RECHTS RENDERN
+            renderer.setScissor(width / 2, 0, width / 2, height);
+            renderer.setViewport(width / 2, 0, width / 2, height);
+            renderer.render(sceneRight, camera);
+        }
+
+        function onResize() {
+            const container = document.getElementById('canvas-container');
+            // Bei Splitscreen ist der Aspect Ratio: (Breite / 2) / Höhe
+            const aspect = (container.clientWidth / 2) / container.clientHeight;
+
+            camera.aspect = aspect;
+            camera.updateProjectionMatrix();
+
+            renderer.setSize(container.clientWidth, container.clientHeight);
+        }
+
+        init();
+    </script>
+</body>
+
+</html>

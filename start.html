@@ -1,0 +1,931 @@
+<!DOCTYPE html>
+<html lang="de">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LIVE 3D Satelliten Visualisierung (V3.4 / V2.5 API)</title>
+
+    <style>
+        /* (Der gesamte CSS-Block aus V3.2) */
+        body {
+            margin: 0;
+            background-color: #000;
+            color: #fff;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        #main-container {
+            display: flex;
+            flex-direction: row;
+            flex-grow: 1;
+            overflow: hidden;
+        }
+
+        #canvas-container {
+            flex-grow: 1;
+            position: relative;
+            cursor: grab;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        #label-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+
+        #loader {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 200;
+            color: #00ffff;
+            font-size: 1.2em;
+            font-family: 'Courier New', Courier, monospace;
+            text-align: center;
+            padding: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            border-radius: 8px;
+        }
+
+        #loader.error {
+            color: #ff4d4d;
+        }
+
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 90%;
+            max-width: 600px;
+            text-align: center;
+            z-index: 100;
+            padding: 10px;
+            background-color: rgba(0, 0, 0, 0.6);
+            border-radius: 8px;
+            font-size: 0.9em;
+        }
+
+        #time-display {
+            margin-top: 5px;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 1.1em;
+            color: #00ffff;
+        }
+
+        #controls {
+            padding: 10px;
+            background-color: #1a1a1a;
+            text-align: center;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            border-top: 1px solid #00ffff;
+        }
+        
+        #controls label {
+            white-space: nowrap;
+        }
+
+        button,
+        select {
+            padding: 5px 10px;
+            font-size: 14px;
+            cursor: pointer;
+            background-color: #333;
+            color: #fff;
+            border: 1px solid #555;
+            border-radius: 4px;
+        }
+
+        button:hover,
+        select:hover {
+            background-color: #00ffff;
+            color: #000;
+        }
+
+        progress {
+            width: 100%;
+            margin-top: 10px;
+        }
+
+        .label-text {
+            color: rgba(246, 255, 0, 0.691);
+            background-color: transparent;
+            padding: 2px 8px;
+            font-size: 12px;
+            font-family: 'Courier New', Courier, monospace;
+            white-space: nowrap;
+            border: none;
+        }
+
+        #data-sidebar {
+            width: 380px;
+            flex-shrink: 0;
+            background-color: rgba(10, 20, 30, 0.5);
+            border-left: 1px solid #00ffff;
+            padding: 15px;
+            box-sizing: border-box;
+            font-family: 'Courier New', Courier, monospace;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        #data-sidebar h3 {
+            margin-top: 0;
+            text-align: center;
+            color: #00ffff;
+            text-shadow: 0 0 2px #00ffff;
+        }
+
+        #satellite-table-container {
+            flex-grow: 1;
+            overflow-y: auto;
+            margin-top: 10px;
+        }
+
+        #satellite-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+
+        #satellite-table th,
+        #satellite-table td {
+            padding: 6px;
+            text-align: right;
+        }
+
+        #satellite-table th {
+            color: #00ffff;
+            border-bottom: 1px solid #00ffff;
+            position: sticky;
+            top: 0;
+            background: #1a1a1a;
+        }
+
+        #satellite-table td {
+            color: #dddddd;
+        }
+
+        #satellite-table tr:nth-child(even) {
+            background-color: rgba(0, 255, 255, 0.05);
+        }
+
+        .legend-color {
+            width: 12px;
+            height: 12px;
+            display: inline-block;
+            margin-right: 5px;
+            border: 1px solid #555;
+        }
+
+        .legend-flag {
+            margin-right: 5px;
+        }
+
+        #satellite-table-container::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        #satellite-table-container::-webkit-scrollbar-track {
+            background: #1e2a38;
+        }
+
+        #satellite-table-container::-webkit-scrollbar-thumb {
+            background-color: #3498db;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="main-container">
+        <div id="canvas-container">
+            <div id="info">
+                LIVE 3D Satelliten Visualisierung (V3.4 Architektur) | Observer: <span id="latitude">--</span>, <span
+                    id="longitude">--</span>
+                <div id="time-display">
+                    <span id="currentTime">--:--:--</span>
+                </div>
+                <progress id="progressBar" value="0" max="100"></progress>
+            </div>
+            <div id="label-container"></div>
+            <div id="loader">Lade 3D-Modelle...</div>
+        </div>
+
+        <div id="data-sidebar">
+            <h3>SATELLITEN-STATUS</h3>
+            <div id="legend"></div>
+            <div id="satellite-table-container">
+                <table id="satellite-table">
+                    <thead>
+                        <tr>
+                            <th>Sys</th>
+                            <th>ID</th>
+                            <th>Elev</th>
+                            <th>Azim</th>
+                            <th>SNR</th>
+                            <th>Solo</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div id="controls">
+        <!-- Zeit-Laden -->
+        <label for="range-select">Daten:</label>
+        <select id="range-select">
+            <option value="1h">Letzte 1 Std</option>
+            <option value="12h">Letzte 12 Std</option>
+            <option value="24h">Letzte 24 Std</option>
+            <option value="7d">Letzte 7 Tage</option>
+            <option value="all">Alle Daten (Downsampled)</option>
+        </select>
+        <button id="load-data-btn">Laden</button>
+        <span style="border-left: 1px solid #555; height: 20px;"></span>
+
+        <!-- Playback -->
+        <button id="play-pause-btn">Play</button>
+        <label for="speed-slider">Speed:</label>
+        <input type="range" id="speed-slider" min="1" max="1000" value="10" step="1" style="width: 80px;">
+        <span id="speed-display">10x</span>
+        <span style="border-left: 1px solid #555; height: 20px;"></span>
+        
+        <!-- NEUER REGLER: Schweif-Länge -->
+        <label for="trail-slider">Schweif (Pkte):</label>
+        <input type="range" id="trail-slider" min="100" max="20100" value="800" step="100" style="width: 80px;">
+        <span id="trail-display">800 Pkte</span>
+        <span style="border-left: 1px solid #555; height: 20px;"></span>
+
+        <!-- Zeit-Scrub -->
+        <label for="time-slider">Zeit (Scrub):</label>
+        <input type="range" id="time-slider" min="0" max="0" value="0" style="width: 15%;">
+    </div>
+
+    <!-- Alle JS-Bibliotheken (Three.js etc.) bleiben gleich -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/renderers/CSS2DRenderer.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+
+    <script>
+        // ===================================================================================
+        // KONSTANTEN & BEOBACHTER-POSITION
+        // ===================================================================================
+
+        let OBSERVER_LAT = 50.65; // Saalfeld Fallback
+        let OBSERVER_LON = 11.36; // Saalfeld Fallback
+
+        const earthRadius = 5;
+        // (6371km Erde + 20200km Orbit) / 6371km Erde = 4.17
+        const satelliteOrbitRadius = earthRadius * ((6371 + 20200) / 6371); 
+
+        // V3.4: "Sprung"-Erkennung
+        // Wenn Distanz (in 3D-Einheiten) größer ist, starte neue Linie
+        const MAX_JUMP_DISTANCE = 10.0; 
+        // Satellit nach 5 Min. (300 Frames) ohne Daten entfernen.
+        const GARBAGE_COLLECTION_FRAMES = 300; 
+
+        // 3D-Berechnungsfunktionen (unverändert)
+        function calculateSatellitePosition(userPosition, satInfo) {
+            const userUpVector = userPosition.clone().normalize();
+            const rotationQuaternion = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), userUpVector);
+            const azimRad = THREE.MathUtils.degToRad(satInfo.azim - 90);
+            const elevRad = THREE.MathUtils.degToRad(satInfo.elev);
+
+            const sightLineDirection = new THREE.Vector3(
+                Math.cos(elevRad) * Math.cos(azimRad),
+                Math.sin(elevRad),
+                Math.cos(elevRad) * Math.sin(azimRad)
+            );
+            sightLineDirection.applyQuaternion(rotationQuaternion).normalize();
+
+            // Linienschnittpunkt Kugel (Ray-Sphere Intersection)
+            const a = 1;
+            const b = 2 * userPosition.dot(sightLineDirection);
+            // c = (userPos - Kugelzentrum)² - Kugelradius² 
+            // (Zentrum ist 0,0,0)
+            const c = userPosition.lengthSq() - satelliteOrbitRadius * satelliteOrbitRadius;
+            const discriminant = b * b - 4 * a * c;
+
+            if (discriminant >= 0) {
+                // Finde den positiven Schnittpunkt (t)
+                const t = (-b + Math.sqrt(discriminant)) / (2 * a);
+                // Position = UserPos + Richtung * t
+                return userPosition.clone().add(sightLineDirection.multiplyScalar(t));
+            } else {
+                // Sollte nie passieren, wenn Satellit sichtbar ist
+                // Fallback: Projiziere einfach auf die Kugel
+                return sightLineDirection.multiplyScalar(satelliteOrbitRadius);
+            }
+        }
+
+        function getEarthRotationFromDatetime(datetimeString) {
+            const date = new Date(datetimeString.replace(' ', 'T') + 'Z');
+            const totalSecondsInDay = (date.getUTCHours() * 3600) + (date.getUTCMinutes() * 60) + date.getUTCSeconds();
+            const fractionOfDay = totalSecondsInDay / 86400; // 86400s pro Tag
+            // Rotiert um Y-Achse
+            return (fractionOfDay * 2 * Math.PI);
+        }
+
+        function getPositionFromLatLon(lat, lon, radius) {
+            const latRad = THREE.MathUtils.degToRad(lat);
+            const lonRad = THREE.MathUtils.degToRad(-lon); // -lon für korrekte Erd-Ausrichtung
+            return new THREE.Vector3(
+                radius * Math.cos(latRad) * Math.cos(lonRad), // X
+                radius * Math.sin(latRad),                     // Y (Up)
+                radius * Math.cos(latRad) * Math.sin(lonRad)  // Z
+            );
+        }
+
+        // ===================================================================================
+        // GLOBALE VARIABLEN
+        // ===================================================================================
+
+        let scene, camera, renderer, labelRenderer, controls, earth, userArrow, directionalLight, starField;
+        let satelliteModel;
+
+        let satelliteData = [];
+        let satelliteObjects = new Map(); // Speichert alle Satelliten-Objekte
+        let isPaused = true;
+        let playbackSpeed = 10;
+        let timeAccumulator = 0;
+        let clock = new THREE.Clock();
+        
+        // V3.4: Schweif-Längen-Variablen
+        const defaultMaxTrailPoints = 800;
+        let currentMaxTrailPoints = defaultMaxTrailPoints; // Dynamisch durch Regler
+        
+        let soloModeSatelliteId = null; // Für Solo-Modus
+
+        // DOM-Elemente
+        const loaderElement = document.getElementById('loader');
+        const progressBar = document.getElementById('progressBar');
+        const canvasContainer = document.getElementById('canvas-container');
+        const labelContainer = document.getElementById('label-container');
+        const currentTimeEl = document.getElementById('currentTime');
+        const satelliteTableBody = document.querySelector('#satellite-table tbody');
+
+        const slider = document.getElementById('time-slider');
+        const playPauseBtn = document.getElementById('play-pause-btn');
+        const speedSlider = document.getElementById('speed-slider');
+        const speedDisplay = document.getElementById('speed-display');
+        const loadDataBtn = document.getElementById('load-data-btn');
+        const rangeSelect = document.getElementById('range-select');
+        
+        // NEU: Schweif-Regler-Elemente
+        const trailSlider = document.getElementById('trail-slider');
+        const trailDisplay = document.getElementById('trail-display');
+
+        // ===================================================================================
+        // DATENVERARBEITUNG
+        // ===================================================================================
+
+        async function loadModelsAndInitScene() {
+            try {
+                const gltfLoader = new THREE.GLTFLoader();
+                const earthPromise = gltfLoader.loadAsync('earth.glb');
+                const satellitePromise = gltfLoader.loadAsync('satellite.glb');
+                const [earthGltf, satelliteGltf] = await Promise.all([earthPromise, satellitePromise]);
+
+                earth = earthGltf.scene;
+                satelliteModel = satelliteGltf.scene;
+
+                init();
+                loaderElement.style.display = 'none';
+
+            } catch (error) {
+                console.error("Fehler beim Laden der 3D-Modelle:", error);
+                loaderElement.textContent = `Fehler: ${error.message}. Modelle (earth.glb, satellite.glb) nicht gefunden.`;
+                loaderElement.classList.add('error');
+            }
+        }
+
+        async function loadData() {
+            const range = rangeSelect.value;
+            loaderElement.textContent = `Lade Daten für "${range}"...`;
+            loaderElement.classList.remove('error');
+            loaderElement.style.display = 'block';
+
+            if (!isPaused) togglePlayPause();
+            removeAllSatellites();
+            satelliteData = [];
+            
+            // Setze Regler zurück
+            trailSlider.value = defaultMaxTrailPoints;
+            currentMaxTrailPoints = defaultMaxTrailPoints;
+            trailDisplay.textContent = `${defaultMaxTrailPoints} Pkte`;
+
+            try {
+                // Cache-Buster, damit Daten immer frisch sind
+                const response = await fetch(`get_data.php?range=${range}&t=${new Date().getTime()}`);
+
+                if (!response.ok) {
+                    throw new Error(`HTTP-Fehler! Status: ${response.status}`);
+                }
+                const data = await response.json();
+                
+                if (data.error) {
+                    throw new Error(`PHP/SQL Fehler: ${data.error}`);
+                }
+
+                loaderElement.style.display = 'none';
+                processJSONData(data);
+
+            } catch (error) {
+                console.error("Fehler beim Laden der Daten:", error);
+                loaderElement.textContent = `Fehler: ${error.message}. Stelle sicher, dass get_data.php (V2.4+) funktioniert.`;
+                loaderElement.classList.add('error');
+            }
+        }
+
+        function processJSONData(data) {
+            satelliteData = data;
+
+            if (!satelliteData || satelliteData.length === 0) {
+                console.warn("Keine gültigen Daten vom Server empfangen (leeres Array).");
+                loaderElement.textContent = 'Keine Daten für diesen Zeitraum gefunden.';
+                loaderElement.classList.add('error');
+                loaderElement.style.display = 'block';
+                slider.max = 0;
+                slider.value = 0;
+                progressBar.max = 0;
+                progressBar.value = 0;
+                return;
+            }
+
+            slider.max = satelliteData.length - 1;
+            progressBar.max = satelliteData.length - 1;
+            slider.value = 0;
+            progressBar.value = 0;
+
+            OBSERVER_LAT = (satelliteData[0]?.lat ?? 0.0);
+            OBSERVER_LON = (satelliteData[0]?.lon ?? 0.0);
+
+            if (OBSERVER_LAT === 0.0) {
+                console.warn("Erster Frame hatte keine Lat/Lon. Nutze Fallback.");
+                OBSERVER_LAT = 50.65; // Fallback
+                OBSERVER_LON = 11.36; // Fallback
+            }
+
+            document.getElementById('latitude').innerText = OBSERVER_LAT.toFixed(4);
+            document.getElementById('longitude').innerText = OBSERVER_LON.toFixed(4);
+
+            updateFrameData(0);
+            console.log(`JSON verarbeitet. ${satelliteData.length} Sekunden-Frames geladen.`);
+        }
+
+
+        // ===================================================================================
+        // 3D-SETUP & SZENE
+        // ===================================================================================
+
+        function init() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(75, canvasContainer.clientWidth / canvasContainer.clientHeight, 0.1, 1000);
+            camera.position.set(0, 20, 40);
+            camera.lookAt(scene.position);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(canvasContainer.clientWidth, canvasContainer.clientHeight);
+            canvasContainer.appendChild(renderer.domElement);
+
+            labelRenderer = new THREE.CSS2DRenderer();
+            labelRenderer.setSize(canvasContainer.clientWidth, canvasContainer.clientHeight);
+            labelContainer.appendChild(labelRenderer.domElement);
+
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+
+            scene.add(new THREE.AmbientLight(0x888888));
+            directionalLight = new THREE.DirectionalLight(0xffffff, 2.0);
+            scene.add(directionalLight);
+
+            earth.scale.set(earthRadius, earthRadius, earthRadius);
+            scene.add(earth);
+
+            userArrow = new THREE.ArrowHelper(new THREE.Vector3(0, -1, 0), new THREE.Vector3(0, 0, 0), 0.8, 0xff0000, 0.2, 0.1);
+            earth.add(userArrow);
+
+            createBackground();
+            createLegend();
+            setupEventListeners();
+            animate();
+        }
+
+        function createBackground() {
+            // (Unverändert)
+            const starsGeometry = new THREE.BufferGeometry();
+            const starsCount = 10000;
+            const posArray = new Float32Array(starsCount * 3);
+            for (let i = 0; i < starsCount; i++) {
+                const radius = 300, theta = 2 * Math.PI * Math.random(), phi = Math.acos(2 * Math.random() - 1);
+                posArray[i * 3] = radius * Math.sin(phi) * Math.cos(theta);
+                posArray[i * 3 + 1] = radius * Math.sin(phi) * Math.sin(theta);
+                posArray[i * 3 + 2] = radius * Math.cos(phi);
+            }
+            starsGeometry.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
+            const starsMaterial = new THREE.PointsMaterial({ size: 0.2, color: 0xffffff });
+            starField = new THREE.Points(starsGeometry, starsMaterial);
+            scene.add(starField);
+
+            const planeGeometry = new THREE.PlaneGeometry(200, 200, 100, 100);
+            planeGeometry.rotateX(-Math.PI / 2);
+            const planeMaterial = new THREE.MeshBasicMaterial({ color: 0x00ffff, wireframe: true, transparent: true, opacity: 0.25 });
+            const gravityGrid = new THREE.Mesh(planeGeometry, planeMaterial);
+            gravityGrid.position.y = -15;
+            scene.add(gravityGrid);
+        }
+
+        function createLegend() {
+            // (Unverändert)
+            const legendDiv = document.getElementById('legend');
+            const systems = [
+                { name: 'GPS (USA)', flag: '🇺🇸', colorKey: 'GPS' },
+                { name: 'GLONASS (Russ.)', flag: '🇷🇺', colorKey: 'GLONASS' },
+                { name: 'BeiDou (China)', flag: '🇨🇳', colorKey: 'BeiDou' },
+                { name: 'Galileo (EU)', flag: '🇪🇺', colorKey: 'Galileo' },
+                { name: 'Andere', flag: '🛰️', colorKey: 'Other' }
+            ];
+
+            let html = '<strong>Legende</strong><hr style="border-color: #333; margin: 5px 0 8px 0;">';
+            systems.forEach(sys => {
+                const colorHex = getSatColor(sys.colorKey).toString(16).padStart(6, '0');
+                html += `<div style="display: flex; align-items: center; margin-bottom: 5px;">
+                    <span class="legend-flag">${sys.flag}</span>
+                    <div class="legend-color" style="background-color: #${colorHex};"></div>
+                    <span>${sys.name}</span>
+                </div>`;
+            });
+            legendDiv.innerHTML = html;
+        }
+
+        function setupEventListeners() {
+            loadDataBtn.addEventListener('click', () => loadData());
+
+            slider.addEventListener('input', (e) => {
+                if (!isPaused) togglePlayPause();
+                updateFrameData(parseInt(e.target.value));
+            });
+            playPauseBtn.addEventListener('click', togglePlayPause);
+
+            speedSlider.addEventListener('input', (e) => {
+                let val = parseInt(e.target.value);
+                if (val <= 100) {
+                    playbackSpeed = val;
+                    speedDisplay.textContent = `${val}x`;
+                } else if (val <= 900) { 
+                    let scaled = Math.round(val / 10) * 10;
+                    playbackSpeed = scaled;
+                    speedDisplay.textContent = `${scaled}x`;
+                } else { 
+                    playbackSpeed = 1000;
+                    speedDisplay.textContent = `1000x`;
+                }
+            });
+            
+            // NEU: Event Listener für Schweif-Länge
+            trailSlider.addEventListener('input', (e) => {
+                const value = parseInt(e.target.value);
+                if (value >= 20100) { // Max-Wert = Unendlich
+                    currentMaxTrailPoints = Infinity;
+                    trailDisplay.textContent = "Unendlich";
+                } else {
+                    currentMaxTrailPoints = value;
+                    trailDisplay.textContent = `${value} Pkte`;
+                }
+            });
+            
+            // Solo-Modus Listener
+            satelliteTableBody.addEventListener('click', (e) => {
+                if (e.target.classList.contains('solo-check')) {
+                    const checkbox = e.target;
+                    const satId = checkbox.dataset.id;
+
+                    if (checkbox.checked) {
+                        soloModeSatelliteId = satId;
+                        satelliteTableBody.querySelectorAll('.solo-check').forEach(cb => {
+                            if (cb !== checkbox) cb.checked = false;
+                        });
+                    } else {
+                        soloModeSatelliteId = null;
+                    }
+                }
+            });
+
+            window.addEventListener('resize', onWindowResize, false);
+        }
+
+        function togglePlayPause() {
+            isPaused = !isPaused;
+            playPauseBtn.textContent = isPaused ? "Play" : "Pause";
+            clock.getDelta();
+        }
+
+        // --- Hilfsfunktionen ---
+
+        function getSatColor(system) {
+            // (Prüft gegen die Unique ID, z.B. G08, E11)
+            if (system.startsWith('G')) return 0x00ff00; // Grün
+            if (system.startsWith('R')) return 0xff0000; // Rot
+            if (system.startsWith('C')) return 0x0000ff; // Blau
+            if (system.startsWith('E')) return 0xffff00; // Gelb
+            return 0xffffff; // Weiß
+        }
+
+        function getFlag(system) {
+            if (system.startsWith('G')) return '🇺🇸';
+            if (system.startsWith('R')) return '🇷🇺';
+            if (system.startsWith('C')) return '🇨🇳';
+            if (system.startsWith('E')) return '🇪🇺';
+            return '🛰️';
+        }
+        
+        // V3.4: Erstellt eine NEUE Linie/Material (wird für Sprünge gebraucht)
+        function createTrailLine(satId) {
+            const trailPoints = [];
+            const trailGeometry = new THREE.BufferGeometry().setFromPoints(trailPoints);
+            const trailMaterial = new THREE.LineBasicMaterial({ 
+                color: getSatColor(satId), 
+                transparent: true, 
+                opacity: 0.5 
+            });
+            const trailLine = new THREE.Line(trailGeometry, trailMaterial);
+            scene.add(trailLine);
+            return { points: trailPoints, line: trailLine };
+        }
+
+        // --- Satelliten-Management ---
+
+        // V3.4: Zurück zur Segment-Logik
+        function removeSatellite(id) {
+            if (satelliteObjects.has(id)) {
+                const so = satelliteObjects.get(id);
+                if (so.label) {
+                    so.mesh.remove(so.label);
+                }
+                scene.remove(so.mesh);
+                // Entferne ALLE Segmente
+                so.trailSegments.forEach(seg => scene.remove(seg.line));
+                so.tableRow.remove();
+                satelliteObjects.delete(id);
+            }
+        }
+
+        // V3.4: Zurück zur Segment-Logik
+        function removeAllSatellites() {
+            satelliteObjects.forEach(so => {
+                if (so.label) so.mesh.remove(so.label);
+                scene.remove(so.mesh);
+                so.trailSegments.forEach(seg => scene.remove(seg.line));
+                so.tableRow.remove();
+            });
+            satelliteObjects.clear();
+            satelliteTableBody.innerHTML = '';
+        }
+
+        // V3.4: Erstellt Satellit OHNE Schweif (Schweif kommt in updateFrameData)
+        function createSatellite(satData) {
+            const newSatellite = satelliteModel.clone();
+            newSatellite.scale.set(0.1, 0.1, 0.1);
+            newSatellite.visible = false;
+
+            const textDiv = document.createElement('div');
+            textDiv.className = 'label-text';
+            textDiv.textContent = satData.id;
+            const label = new THREE.CSS2DObject(textDiv);
+            label.position.set(0, 0.5, 0);
+            newSatellite.add(label);
+
+            scene.add(newSatellite);
+
+            const row = satelliteTableBody.insertRow();
+            row.id = `sat-row-${satData.id}`;
+
+            row.innerHTML = `
+                <td>${getFlag(satData.id)}</td>
+                <td>${satData.id}</td>
+                <td class="elev">--</td>
+                <td class="azim">--</td>
+                <td class="snr">--</td>
+                <td><input type="checkbox" class="solo-check" data-id="${satData.id}"></td>
+            `;
+            row.cells[2].style.textAlign = 'right';
+            row.cells[3].style.textAlign = 'right';
+            row.cells[4].style.textAlign = 'right';
+            row.cells[5].style.textAlign = 'center';
+
+            const satObject = {
+                id: satData.id,
+                mesh: newSatellite,
+                label: label,
+                tableRow: row,
+                targetPosition: new THREE.Vector3(),
+                trailSegments: [], // V3.4: Startet leer
+                framesSinceDisappeared: 0
+            };
+            satelliteObjects.set(satData.id, satObject);
+            return satObject;
+        }
+
+        // V3.4: HAUPTLOGIK (mit Sprung-Erkennung)
+        function updateFrameData(index) {
+            if (index < 0 || index >= satelliteData.length) return;
+
+            const currentFrame = satelliteData[index];
+
+            if (!currentFrame || !currentFrame.satellites || !currentFrame.datetime) {
+                console.warn(`Frame-Daten für Index ${index} sind ungültig.`, currentFrame);
+                return;
+            }
+
+            // 1. Erde und Licht aktualisieren
+            earth.rotation.y = getEarthRotationFromDatetime(currentFrame.datetime);
+            const userLocalPosition = getPositionFromLatLon(currentFrame.lat, currentFrame.lon, 1);
+            userArrow.position.copy(userLocalPosition);
+            userArrow.setDirection(userLocalPosition.clone().normalize().negate());
+
+            const userWorldPosition = new THREE.Vector3();
+            userArrow.getWorldPosition(userWorldPosition);
+            directionalLight.position.copy(userWorldPosition).normalize().multiplyScalar(50);
+
+            currentTimeEl.textContent = currentFrame.datetime;
+            progressBar.value = index;
+
+            // 2. Satelliten-Map für diesen Frame erstellen
+            const frameSatellites = new Map();
+            if (Array.isArray(currentFrame.satellites)) {
+                currentFrame.satellites.forEach(s => {
+                    frameSatellites.set(s.id, s);
+                });
+            }
+
+            // --- SCHLEIFE 1: Verarbeite alle Satelliten im Frame ---
+            frameSatellites.forEach(satData => {
+                let so = satelliteObjects.get(satData.id);
+
+                // A. Prüfen, ob Satellit unter Horizont
+                if (satData.elev <= 0) {
+                    if (so) removeSatellite(satData.id); 
+                    return; // Nächsten Satellit bearbeiten
+                }
+
+                // B. Neue Position berechnen
+                const newPosition = calculateSatellitePosition(userWorldPosition, satData);
+
+                // C. Satellit neu erstellen, falls nötig
+                if (!so) {
+                    so = createSatellite(satData);
+                    // Dies ist der erste Punkt. Erstelle das erste Segment.
+                    const firstSegment = createTrailLine(satData.id);
+                    firstSegment.points.push(newPosition.clone());
+                    so.trailSegments.push(firstSegment);
+                } else {
+                    // D. "SPRUNG"-LOGIK (für existierende Satelliten)
+                    const currentSegment = so.trailSegments[so.trailSegments.length - 1];
+                    const lastPoint = currentSegment.points[currentSegment.points.length - 1];
+                    
+                    // Prüfe Distanz zum letzten Punkt
+                    const distance = lastPoint.distanceTo(newPosition);
+
+                    if (distance > MAX_JUMP_DISTANCE) {
+                        // SPRUNG ERKANNT! Starte neues Segment.
+                        const newSegment = createTrailLine(satData.id);
+                        newSegment.points.push(newPosition.clone());
+                        so.trailSegments.push(newSegment);
+                    } else {
+                        // Kein Sprung. An aktuelles Segment anfügen.
+                        currentSegment.points.push(newPosition.clone());
+                    }
+                }
+                
+                // E. Allgemeine Updates
+                so.framesSinceDisappeared = 0;
+                so.mesh.visible = true;
+                so.targetPosition.copy(newPosition);
+                so.label.element.textContent = satData.id;
+                
+                // F. Tabelle aktualisieren
+                so.tableRow.style.color = '#ddd';
+                so.tableRow.cells[2].textContent = `${satData.elev}°`;
+                so.tableRow.cells[3].textContent = `${satData.azim}°`;
+                so.tableRow.cells[4].textContent = satData.snr;
+            });
+
+            // --- SCHLEIFE 2: "Müllabfuhr" für nicht gesehene Satelliten ---
+            satelliteObjects.forEach(so => {
+                if (!frameSatellites.has(so.id)) {
+                    so.framesSinceDisappeared++;
+                    
+                    if (so.framesSinceDisappeared > 5) {
+                        so.tableRow.style.color = '#777'; 
+                    }
+                    
+                    if (so.framesSinceDisappeared > GARBAGE_COLLECTION_FRAMES) {
+                         removeSatellite(so.id);
+                    }
+                }
+            });
+        }
+
+        // V3.4: Animate-Schleife (mit Schweif-Längen-Kürzung)
+        function animate() {
+            requestAnimationFrame(animate);
+            if (!isPaused) controls.update(); 
+
+            const deltaTime = clock.getDelta();
+
+            // 1. Playback-Logik
+            if (!isPaused && satelliteData.length > 0) {
+                timeAccumulator += deltaTime;
+                const timePerFrame = 1.0 / playbackSpeed;
+
+                while (timeAccumulator >= timePerFrame) {
+                    timeAccumulator -= timePerFrame;
+                    let newIndex = parseInt(slider.value) + 1;
+                    if (newIndex >= satelliteData.length) {
+                        newIndex = 0;
+                    }
+                    slider.value = newIndex;
+                    updateFrameData(newIndex);
+                }
+            }
+
+            // 2. Render-Logik (für alle Satelliten)
+            satelliteObjects.forEach(so => {
+                
+                // A. Solo-Modus-Logik
+                let isVisible = so.mesh.visible; 
+                if (soloModeSatelliteId !== null) {
+                    isVisible = (so.id === soloModeSatelliteId);
+                }
+                
+                so.label.visible = isVisible;
+                so.mesh.visible = isVisible;
+
+                // B. Mesh-Position aktualisieren
+                if (so.mesh.visible) {
+                    so.mesh.position.lerp(so.targetPosition, 15 * deltaTime);
+                    so.mesh.lookAt(earth.position);
+                    so.mesh.rotateY(THREE.MathUtils.degToRad(-90));
+                }
+                
+                // C. Schweif-Logik (V3.4: Segmente + Längen-Check)
+                so.trailSegments.forEach(seg => {
+                    // DYNAMISCHES KÜRZEN (basierend auf Regler)
+                    while (seg.points.length > currentMaxTrailPoints) {
+                        seg.points.shift(); // Entferne ältesten Punkt
+                    }
+
+                    // Sichtbarkeit & Update
+                    seg.line.visible = isVisible && seg.points.length > 1;
+                    if (seg.line.visible) {
+                        seg.line.geometry.setFromPoints(seg.points);
+                        // Benötigt für dynamisches Kürzen
+                        seg.line.geometry.attributes.position.needsUpdate = true; 
+                    }
+                });
+            });
+
+            if (starField) starField.rotation.y += 0.00005;
+
+            renderer.render(scene, camera);
+            labelRenderer.render(scene, camera);
+        }
+
+        function onWindowResize() {
+            camera.aspect = canvasContainer.clientWidth / canvasContainer.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(canvasContainer.clientWidth, canvasContainer.clientHeight);
+            labelRenderer.setSize(canvasContainer.clientWidth, canvasContainer.clientHeight);
+        }
+
+        // Startet den Ladevorgang (nur 3D-Modelle)
+        loadModelsAndInitScene();
+
+    </script>
+</body>
+
+</html>

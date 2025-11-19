@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="de">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Orbit-Visualisierung (Gefiltert)</title>
+    <link rel="icon" href="data:;base64,iVBORw0KGgo=">
+    <style>
+        body {
+            margin: 0;
+            background-color: #000;
+            color: #fff;
+            font-family: Arial, sans-serif;
+            overflow: hidden;
+            display: flex;
+            height: 100vh;
+        }
+
+        #main-container {
+            display: flex;
+            flex-grow: 1;
+            overflow: hidden;
+        }
+
+        #canvas-container {
+            flex-grow: 1;
+            position: relative;
+            cursor: grab;
+        }
+
+        #loader {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 200;
+            color: #00ffff;
+            font-size: 1.2em;
+            text-align: center;
+            padding: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            border-radius: 8px;
+        }
+
+        /* --- NEU: VERBESSERTE SEITENLEISTE --- */
+        #sidebar {
+            width: 320px;
+            flex-shrink: 0;
+            background-color: #111;
+            border-left: 1px solid #333;
+            display: flex;
+            flex-direction: column;
+            box-sizing: border-box;
+        }
+
+        #sidebar-header {
+            padding: 15px;
+            border-bottom: 1px solid #333;
+            background-color: #1a1a1a;
+        }
+
+        #sidebar h3 {
+            margin-top: 0;
+            margin-bottom: 10px;
+            color: #00ffff;
+            font-size: 16px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        /* Filter Buttons */
+        #filter-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 5px;
+        }
+
+        .filter-btn {
+            flex: 1;
+            background: #222;
+            border: 1px solid #444;
+            color: #aaa;
+            padding: 5px 0;
+            cursor: pointer;
+            font-size: 12px;
+            border-radius: 3px;
+            transition: all 0.2s;
+        }
+
+        .filter-btn:hover {
+            background: #333;
+            color: #fff;
+        }
+
+        .filter-btn.active {
+            background: #444;
+            color: #fff;
+            border-color: #fff;
+            font-weight: bold;
+        }
+
+        /* Spezifische Farben für aktiven Zustand */
+        .filter-btn[data-sys="G"].active {
+            border-color: #00ff00;
+            color: #00ff00;
+        }
+
+        /* GPS Grün */
+        .filter-btn[data-sys="R"].active {
+            border-color: #ff0000;
+            color: #ff0000;
+        }
+
+        /* GLONASS Rot */
+        .filter-btn[data-sys="E"].active {
+            border-color: #ffff00;
+            color: #ffff00;
+        }
+
+        /* Galileo Gelb */
+        .filter-btn[data-sys="C"].active {
+            border-color: #0000ff;
+            color: #5555ff;
+        }
+
+        /* BeiDou Blau */
+
+        #sat-list-container {
+            flex-grow: 1;
+            overflow-y: auto;
+        }
+
+        #sat-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        #sat-list li {
+            padding: 8px 15px;
+            cursor: pointer;
+            border-bottom: 1px solid #222;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        #sat-list li:hover {
+            background-color: #222;
+        }
+
+        #sat-list li.active {
+            background-color: #004444;
+            color: #00ffff;
+            border-left: 3px solid #00ffff;
+        }
+
+        /* Scrollbar */
+        #sat-list-container::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        #sat-list-container::-webkit-scrollbar-track {
+            background: #111;
+        }
+
+        #sat-list-container::-webkit-scrollbar-thumb {
+            background-color: #444;
+            border-radius: 4px;
+        }
+
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+</head>
+
+<body>
+    <div id="main-container">
+        <div id="canvas-container">
+            <div id="loader">Lade 3D-Modelle und Orbits...</div>
+            <div id="orbit-clock">00:00:00</div>
+        </div>
+
+        <div id="sidebar">
+            <div id="sidebar-header">
+                <h3>Filter</h3>
+                <div id="filter-container">
+                    <button class="filter-btn active" data-sys="ALL">ALLE</button>
+                    <button class="filter-btn" data-sys="G">GPS</button>
+                    <button class="filter-btn" data-sys="R">GLO</button>
+                    <button class="filter-btn" data-sys="E">GAL</button>
+                    <button class="filter-btn" data-sys="C">BDS</button>
+                </div>
+            </div>
+            <div id="sat-list-container">
+                <ul id="sat-list">
+                    <li id="sat-all" class="active">Alle anzeigen</li>
+                    <!-- Liste wird per JS gefüllt -->
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let scene, camera, renderer, controls, earth;
+        let animatedSatellites = [];
+        let allOrbitsMeshes = [];
+        const clock = new THREE.Clock();
+        const playbackSpeed = 500;
+        const earthRadius = 5;
+
+        // Globale Daten
+        let allLoadedOrbitData = null;
+        let currentFilter = 'ALL';
+
+        async function init() {
+            scene = new THREE.Scene();
+            const container = document.getElementById('canvas-container');
+
+            camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, 1000);
+            camera.position.set(0, 15, 30);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(container.clientWidth, container.clientHeight);
+            container.appendChild(renderer.domElement);
+
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+
+            scene.add(new THREE.AmbientLight(0x888888));
+            const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
+            dirLight.position.set(5, 3, 5);
+            scene.add(dirLight);
+
+            try {
+                const gltfLoader = new THREE.GLTFLoader();
+                const earthGltf = await gltfLoader.loadAsync('earth.glb');
+                earth = earthGltf.scene;
+                earth.scale.set(earthRadius, earthRadius, earthRadius);
+
+                // HIER: Neigt das Model (und damit die Textur) um 23.4 Grad
+                earth.rotation.z = -23.4 * (Math.PI / 180);
+
+                scene.add(earth);
+
+                loadOrbits();
+            } catch (e) {
+                console.error("Fehler beim Laden von earth.glb", e);
+                document.getElementById('loader').textContent = "Fehler: earth.glb nicht gefunden.";
+            }
+
+            setupFilterButtons();
+            animate();
+        }
+
+        function setupFilterButtons() {
+            const buttons = document.querySelectorAll('.filter-btn');
+            buttons.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    // UI Update
+                    buttons.forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+
+                    // Filter setzen
+                    currentFilter = btn.dataset.sys;
+
+                    // Daten neu zeichnen & Liste updaten
+                    if (allLoadedOrbitData) {
+                        applyFilter();
+                    }
+                });
+            });
+        }
+
+        function applyFilter() {
+            // 1. Filtere die Orbits für die 3D-Ansicht
+            let filteredOrbits = [];
+            let filteredSatList = [];
+
+            if (currentFilter === 'ALL') {
+                filteredOrbits = allLoadedOrbitData.orbits;
+                filteredSatList = allLoadedOrbitData.available_sats;
+            } else {
+                // Filtert alle, die mit dem Buchstaben beginnen (G, R, E, C)
+                filteredOrbits = allLoadedOrbitData.orbits.filter(o => o.sat_id.startsWith(currentFilter));
+                filteredSatList = allLoadedOrbitData.available_sats.filter(s => s.startsWith(currentFilter));
+            }
+
+            // 2. Zeichne 3D-Szene neu
+            drawOrbitsFromData(filteredOrbits);
+
+            // 3. Update Seitenleiste
+            updateSatList(filteredSatList);
+        }
+
+        async function loadOrbits() {
+            const loader = document.getElementById('loader');
+            loader.style.display = 'block';
+
+            try {
+                const response = await fetch('orbits.json' + '?t=' + new Date().getTime());
+                const data = await response.json();
+
+                allLoadedOrbitData = data;
+
+                // Initial alles anzeigen
+                applyFilter();
+
+                loader.style.display = 'none';
+            } catch (e) {
+                console.error("Fehler beim Laden der Orbit-Daten:", e);
+                loader.textContent = "Fehler beim Laden von orbits.json.";
+            }
+        }
+
+        function drawOrbitsFromData(orbitsToDraw) {
+            // Aufräumen
+            animatedSatellites.forEach(sat => scene.remove(sat.mesh));
+            allOrbitsMeshes.forEach(orbit => scene.remove(orbit));
+            animatedSatellites = [];
+            allOrbitsMeshes = [];
+
+            if (orbitsToDraw) {
+                orbitsToDraw.forEach((orbitData, index) => {
+                    const orbit = createOrbit(orbitData);
+                    allOrbitsMeshes.push(orbit);
+                    scene.add(orbit);
+                    createAnimatedSatellite(orbitData, index, orbitsToDraw.length);
+                });
+            }
+        }
+
+        function createOrbit(orbitData) {
+            const points = [];
+            const startVec = new THREE.Vector3(orbitData.startPoint.x, orbitData.startPoint.y, orbitData.startPoint.z);
+            const normalVec = new THREE.Vector3(orbitData.normal.x, orbitData.normal.y, orbitData.normal.z).normalize();
+
+            for (let i = 0; i <= 128; i++) {
+                const angle = (i / 128) * Math.PI * 2;
+                const point = startVec.clone().applyAxisAngle(normalVec, angle);
+                points.push(point);
+            }
+
+            const geometry = new THREE.BufferGeometry().setFromPoints(points);
+            const material = new THREE.LineBasicMaterial({
+                color: orbitData.color || 0x00ffff,
+                transparent: true,
+                opacity: 0.5
+            });
+            return new THREE.Line(geometry, material);
+        }
+
+        function createAnimatedSatellite(orbitData, index, totalInView) {
+            const geometry = new THREE.SphereGeometry(0.15, 16, 16);
+            const material = new THREE.MeshPhongMaterial({
+                color: orbitData.color || 0x00ffff,
+                emissive: orbitData.color || 0x00ffff,
+                emissiveIntensity: 5
+            });
+            const mesh = new THREE.Mesh(geometry, material);
+
+            const startPoint = new THREE.Vector3(orbitData.startPoint.x, orbitData.startPoint.y, orbitData.startPoint.z);
+            mesh.position.copy(startPoint);
+
+            let angularVelocity = orbitData.angular_velocity;
+            if (!angularVelocity || angularVelocity === 0) {
+                // Fallback Kepler
+                const r_gps = (6371 + 20200);
+                const r_new = (6371 + (orbitData.radius / earthRadius * 6371 - 6371));
+                const period_ratio = Math.sqrt(Math.pow(r_new / r_gps, 3));
+                const orbitalPeriod_hours = 11.96 * period_ratio;
+                angularVelocity = (2 * Math.PI) / (orbitalPeriod_hours * 3600);
+            }
+
+            animatedSatellites.push({
+                mesh: mesh,
+                normal: new THREE.Vector3(orbitData.normal.x, orbitData.normal.y, orbitData.normal.z).normalize(),
+                startPoint: startPoint,
+                angularVelocity: angularVelocity,
+                startTimeOffset: (index / (totalInView || 1)) * ((2 * Math.PI) / angularVelocity) / playbackSpeed
+            });
+            scene.add(mesh);
+        }
+
+        function updateSatList(sats) {
+            const list = document.getElementById('sat-list');
+            // Liste leeren, aber Header "Alle anzeigen" (im Kontext des Filters) behalten
+            // Wir nutzen hier "Alle anzeigen" als "Reset Selektion innerhalb des Filters"
+            list.innerHTML = '';
+
+            const liAll = document.createElement('li');
+            liAll.id = 'sat-all';
+            liAll.textContent = `Alle ${currentFilter === 'ALL' ? '' : currentFilter} Orbits`;
+            liAll.classList.add('active');
+            list.appendChild(liAll);
+
+            sats.sort().forEach(sat_id => {
+                const li = document.createElement('li');
+                li.id = `sat-${sat_id}`;
+                // Füge Flagge hinzu
+                let flag = '🛰️';
+                if (sat_id.startsWith('G')) flag = '🇺🇸';
+                if (sat_id.startsWith('R')) flag = '🇷🇺';
+                if (sat_id.startsWith('E')) flag = '🇪🇺';
+                if (sat_id.startsWith('C')) flag = '🇨🇳';
+
+                li.innerHTML = `<span>${flag} ${sat_id}</span>`;
+                list.appendChild(li);
+            });
+        }
+
+        // Event Listener für die Liste (delegiert)
+        document.getElementById('sat-list').addEventListener('click', (e) => {
+            // Finde das geklickte LI (auch wenn span geklickt wurde)
+            const li = e.target.closest('li');
+            if (!li) return;
+
+            if (!allLoadedOrbitData) return;
+
+            document.querySelectorAll('#sat-list li').forEach(l => l.classList.remove('active'));
+            li.classList.add('active');
+            const id = li.id;
+
+            if (id === 'sat-all') {
+                // Zeige alle des aktuellen Filters
+                applyFilter();
+            } else {
+                // Zeige nur diesen einen Satelliten
+                const satIdToFilter = id.replace('sat-', '');
+                // Suche in den ALLEN Daten, nicht nur in den gefilterten
+                const specificOrbit = allLoadedOrbitData.orbits.find(o => o.sat_id === satIdToFilter);
+                if (specificOrbit) {
+                    drawOrbitsFromData([specificOrbit]);
+                }
+            }
+        });
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const elapsedTime = (Date.now() / 1000) * playbackSpeed;
+
+            animatedSatellites.forEach(sat => {
+                const angle = (elapsedTime * sat.angularVelocity) + sat.startTimeOffset;
+                sat.mesh.position.copy(sat.startPoint).applyAxisAngle(sat.normal, angle);
+                sat.mesh.lookAt(earth.position);
+            });
+
+            const totalSeconds = Math.floor(clock.getElapsedTime() * playbackSpeed) % 86400;
+            const hours = String(Math.floor(totalSeconds / 3600)).padStart(2, '0');
+            const minutes = String(Math.floor((totalSeconds % 3600) / 60)).padStart(2, '0');
+            const seconds = String(totalSeconds % 60).padStart(2, '0');
+            document.getElementById('orbit-clock').textContent = `${hours}:${minutes}:${seconds}`;
+
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('resize', () => {
+            const container = document.getElementById('canvas-container');
+            camera.aspect = container.clientWidth / container.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(container.clientWidth, container.clientHeight);
+        }, false);
+
+        init();
+    </script>
+</body>
+
+</html>

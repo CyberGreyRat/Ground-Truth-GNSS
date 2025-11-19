@@ -1,0 +1,751 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LIVE 3D Satelliten Visualisierung (DB-Loader)</title>
+    <style>
+        /* ... (Dein gesamter CSS-Block bleibt 1:1 gleich) ... */
+        body {
+            margin: 0;
+            background-color: #000;
+            color: #fff;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+        #main-container {
+            display: flex;
+            flex-direction: row;
+            flex-grow: 1;
+            overflow: hidden;
+        }
+        #canvas-container {
+            flex-grow: 1;
+            position: relative;
+            cursor: grab;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        #label-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+        #loader {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 200;
+            color: #00ffff;
+            font-size: 1.2em;
+            font-family: 'Courier New', Courier, monospace;
+            text-align: center;
+        }
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 90%;
+            max-width: 600px;
+            text-align: center;
+            z-index: 100;
+            padding: 10px;
+            background-color: rgba(0, 0, 0, 0.6);
+            border-radius: 8px;
+            font-size: 0.9em;
+        }
+        #time-display {
+            margin-top: 5px;
+            font-family: 'Courier New', Courier, monospace;
+        }
+        #controls {
+            padding: 15px;
+            background-color: #1a1a1a;
+            text-align: center;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+        button, .load-btn {
+            padding: 5px 10px;
+            font-size: 14px;
+            cursor: pointer;
+            background-color: #005f5f;
+            border: 1px solid #00ffff;
+            color: #fff;
+            border-radius: 4px;
+        }
+        button:hover, .load-btn:hover {
+            background-color: #008f8f;
+        }
+        progress {
+            width: 100%;
+            margin-top: 10px;
+        }
+        .label-text {
+            color: rgba(246, 255, 0, 0.691);
+            background-color: transparent;
+            padding: 2px 8px;
+            font-size: 12px;
+            font-family: 'Courier New', Courier, monospace;
+            white-space: nowrap;
+            border: none;
+        }
+        #data-sidebar {
+            width: 380px;
+            flex-shrink: 0;
+            background-color: rgba(10, 20, 30, 0.5);
+            border-left: 1px solid #00ffff;
+            padding: 15px;
+            box-sizing: border-box;
+            font-family: 'Courier New', Courier, monospace;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        #data-sidebar h3 {
+            margin-top: 0;
+            text-align: center;
+            color: #00ffff;
+            text-shadow: 0 0 2px #00ffff;
+        }
+        #satellite-table-container {
+            flex-grow: 1;
+            overflow-y: auto;
+            margin-top: 10px;
+        }
+        #satellite-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+        #satellite-table th, #satellite-table td {
+            padding: 6px;
+            text-align: right;
+        }
+        #satellite-table th {
+            color: #00ffff;
+            border-bottom: 1px solid #00ffff;
+        }
+        #satellite-table td {
+            color: #dddddd;
+        }
+        #satellite-table tr:nth-child(even) {
+            background-color: rgba(0, 255, 255, 0.05);
+        }
+        .legend-color {
+            width: 12px;
+            height: 12px;
+            display: inline-block;
+            margin-right: 5px;
+            border: 1px solid #555;
+        }
+        .legend-flag { margin-right: 5px; }
+        
+        #satellite-table-container::-webkit-scrollbar { width: 8px; }
+        #satellite-table-container::-webkit-scrollbar-track { background: #1e2a38; }
+        #satellite-table-container::-webkit-scrollbar-thumb { background-color: #3498db; border-radius: 4px; }
+    </style>
+</head>
+<body>
+    <div id="main-container">
+        <div id="canvas-container">
+            <div id="info">
+                LIVE 3D Satelliten Visualisierung | Observer: <span id="latitude">--</span>, <span id="longitude">--</span>
+                <div id="time-display">
+                    <span id="currentTime">--:--:--</span>
+                </div>
+                <progress id="progressBar" value="0" max="100"></progress>
+            </div>
+            <div id="label-container"></div>
+            <div id="loader">Lade 3D-Modelle...<br>Bitte Datenintervall auswählen.</div>
+        </div>
+
+        <div id="data-sidebar">
+            <h3>SATELLITEN-STEUERUNG</h3>
+            <div id="legend"></div> <div id="satellite-table-container">
+                <table id="satellite-table">
+                    <thead>
+                        <tr>
+                            <th>Sys</th>
+                            <th>ID</th>
+                            <th>Elev</th>
+                            <th>Azim</th>
+                            <th>Farbe</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div id="controls">
+        <div id="load-controls" style="margin-right: 20px; border-right: 1px solid #555; padding-right: 20px; display: flex; gap: 10px; align-items: center;">
+            <label>Lade Daten:</label>
+            <button class="load-btn" data-range="1h">1 Std</button>
+            <button class="load-btn" data-range="12h">12 Std</button>
+            <button class="load-btn" data-range="24h">24 Std</button>
+            <button class="load-btn" data-range="7d">7 Tage</button>
+            <button class="load-btn" data-range="all" title="Lädt alle Datensätze (bis zu 1M+)">Alle</button>
+        </div>
+        
+        <button id="play-pause-btn">Play</button>
+        <label for="speed-slider">Speed:</label>
+        <input type="range" id="speed-slider" min="1" max="1000" value="10">
+        <span id="speed-display">10x</span>
+        
+        <label for="time-slider">Zeit (Zurückspulen):</label>
+        <input type="range" id="time-slider" min="0" max="0" value="0" style="width: 30%;">
+    </div>
+
+    <!-- Alle JS-Bibliotheken (Three.js etc.) bleiben gleich -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/renderers/CSS2DRenderer.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    
+    <script>
+        // ===================================================================================
+        // KONSTANTEN & BEOBACHTER-POSITION
+        // ===================================================================================
+        
+        // DIESE SIND JETZT NUR NOCH FALLBACKS
+        let OBSERVER_LAT = 50.65; // Fallback Saalfeld
+        let OBSERVER_LON = 11.36; // Fallback Saalfeld
+        
+        const earthRadius = 5;
+        const satelliteOrbitRadius = earthRadius * ((6371 + 20200) / 6371);
+        const DROPOUT_TOLERANCE_FRAMES = 18; 
+        
+        function calculateSatellitePosition(userPosition, satInfo) {
+            const userUpVector = userPosition.clone().normalize();
+            const rotationQuaternion = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), userUpVector);
+            const azimRad = THREE.MathUtils.degToRad(satInfo.azim - 90);
+            const elevRad = THREE.MathUtils.degToRad(satInfo.elev);
+            
+            const sightLineDirection = new THREE.Vector3(
+                Math.cos(elevRad) * Math.cos(azimRad),
+                Math.sin(elevRad),
+                Math.cos(elevRad) * Math.sin(azimRad)
+            );
+            sightLineDirection.applyQuaternion(rotationQuaternion).normalize();
+
+            const a = 1;
+            const b = 2 * userPosition.dot(sightLineDirection);
+            const c = userPosition.lengthSq() - satelliteOrbitRadius * satelliteOrbitRadius;
+            const discriminant = b * b - 4 * a * c;
+
+            if (discriminant >= 0) {
+                const t = (-b + Math.sqrt(discriminant)) / (2 * a);
+                return userPosition.clone().add(sightLineDirection.multiplyScalar(t));
+            } else {
+                return sightLineDirection.multiplyScalar(satelliteOrbitRadius);
+            }
+        }
+
+        function getEarthRotationFromDatetime(datetimeString) {
+            // NEUER FIX: Robustere Datumsprüfung
+            if (!datetimeString) {
+                return 0; // Fallback, wenn Datum null ist
+            }
+            const date = new Date(datetimeString.replace(' ', 'T') + 'Z'); 
+            if (isNaN(date)) {
+                return 0; // Fallback, wenn Datum ungültig ist
+            }
+            const totalSecondsInDay = (date.getUTCHours() * 3600) + (date.getUTCMinutes() * 60) + date.getUTCSeconds();
+            const fractionOfDay = totalSecondsInDay / 86400;
+            return (fractionOfDay * 2 * Math.PI);
+        }
+
+        function getPositionFromLatLon(lat, lon, radius) {
+            const latRad = THREE.MathUtils.degToRad(lat);
+            const lonRad = THREE.MathUtils.degToRad(-lon);
+            return new THREE.Vector3(
+                radius * Math.cos(latRad) * Math.cos(lonRad),
+                radius * Math.sin(latRad),
+                radius * Math.cos(latRad) * Math.sin(lonRad)
+            );
+        }
+        
+        // ===================================================================================
+        // GLOBALE VARIABLEN
+        // ===================================================================================
+        
+        let scene, camera, renderer, labelRenderer, controls, earth, userArrow, directionalLight, starField;
+        let satelliteModel;
+        
+        let satelliteData = []; 
+        let satelliteObjects = new Map(); 
+        let isPaused = true;
+        let playbackSpeed = 10;
+        let timeAccumulator = 0;
+        let clock = new THREE.Clock();
+        let maxTrailPoints = 800;
+        
+        const loaderElement = document.getElementById('loader');
+        const progressBar = document.getElementById('progressBar');
+        const canvasContainer = document.getElementById('canvas-container');
+        const labelContainer = document.getElementById('label-container');
+        const currentTimeEl = document.getElementById('currentTime');
+        const satelliteTableBody = document.querySelector('#satellite-table tbody');
+        
+        const slider = document.getElementById('time-slider');
+        const playPauseBtn = document.getElementById('play-pause-btn');
+        const speedSlider = document.getElementById('speed-slider');
+        const speedDisplay = document.getElementById('speed-display');
+
+        // ===================================================================================
+        // DATENVERARBEITUNG
+        // ===================================================================================
+
+        async function loadData(range) {
+            loaderElement.style.display = 'block';
+            loaderElement.innerHTML = `Lade Daten für '${range}'...<br>(Kann bei 'Alle' > 1 Min. dauern)`;
+            
+            if (!isPaused) {
+                togglePlayPause();
+            }
+            
+            satelliteObjects.forEach((so, id) => removeSatellite(id));
+            satelliteTableBody.innerHTML = '';
+            
+            try {
+                const response = await fetch(`get_data.php?range=${range}&t=${new Date().getTime()}`);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP-Fehler! Status: ${response.status}`);
+                }
+                const data = await response.json();
+                
+                loaderElement.style.display = 'none';
+                processJSONData(data); 
+
+            } catch (error) {
+                console.error("Fehler beim Laden der Daten:", error);
+                loaderElement.textContent = `Fehler: ${error.message}. Stelle sicher, dass get_data.php funktioniert.`;
+            }
+        }
+
+        // ==========================================================
+        // ===== HIER IST DER BUGFIX (V3.2) =====
+        // ==========================================================
+        function processJSONData(data) {
+            satelliteData = data;
+            
+            // --- NEUER FIX ---
+            // Wir prüfen, ob 'data' überhaupt ein Array ist UND ob es Einträge hat.
+            if (!Array.isArray(satelliteData) || satelliteData.length === 0) {
+                console.error("Keine gültigen Daten vom Server empfangen (leeres Array).");
+                loaderElement.style.display = 'block';
+                loaderElement.textContent = 'Keine Daten im gewählten Zeitraum gefunden.';
+                slider.max = 0;
+                slider.value = 0;
+                progressBar.max = 0;
+                progressBar.value = 0;
+                updateFrameData(0); // Zeichne leeren Frame
+                return; // WICHTIG: Stoppe hier
+            }
+            // --- ENDE FIX ---
+
+            slider.max = satelliteData.length - 1;
+            progressBar.max = satelliteData.length - 1;
+            
+            // --- NEUER FIX ---
+            // Wir prüfen, ob der erste Frame .lat hat. Wenn nicht, nutzen wir den Fallback.
+            // Das behebt den 'toFixed' Fehler.
+            if (satelliteData[0] && satelliteData[0].lat !== undefined) {
+                OBSERVER_LAT = satelliteData[0].lat;
+                OBSERVER_LON = satelliteData[0].lon;
+            } else {
+                // Nutze den globalen Fallback (50.65, 11.36)
+                console.warn("Erster Frame hatte keine Lat/Lon. Nutze Fallback.");
+            }
+            // --- ENDE FIX ---
+            
+            document.getElementById('latitude').innerText = OBSERVER_LAT.toFixed(4);
+            document.getElementById('longitude').innerText = OBSERVER_LON.toFixed(4);
+
+            updateFrameData(0); 
+            slider.value = 0;
+            progressBar.value = 0;
+            console.log(`JSON verarbeitet. ${satelliteData.length} Sekunden-Frames geladen.`);
+        }
+        // ==========================================================
+        // ===== ENDE BUGFIX =====
+        // ==========================================================
+
+
+        // ===================================================================================
+        // 3D-SETUP & SZENE
+        // ===================================================================================
+
+        async function loadDataAndModels() {
+            try {
+                loaderElement.textContent = 'Lade 3D-Modelle...';
+                const gltfLoader = new THREE.GLTFLoader();
+                const earthPromise = gltfLoader.loadAsync('earth.glb'); 
+                const satellitePromise = gltfLoader.loadAsync('satellite.glb'); 
+                const [earthGltf, satelliteGltf] = await Promise.all([earthPromise, satellitePromise]);
+                
+                earth = earthGltf.scene;
+                satelliteModel = satelliteGltf.scene;
+                
+                init(); 
+                
+                loaderElement.innerHTML = 'Lade 3D-Modelle... OK.<br>Bitte rechts Datenintervall auswählen.';
+                
+            } catch (error) {
+                console.error("Fehler beim Laden der Modelle:", error);
+                loaderElement.textContent = `Fehler: ${error.message}. 3D-Modelle (earth.glb, satellite.glb) nicht gefunden.`;
+            }
+        }
+
+        
+        function init() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(75, canvasContainer.clientWidth / canvasContainer.clientHeight, 0.1, 1000);
+            camera.position.set(0, 20, 40);
+            camera.lookAt(scene.position);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(canvasContainer.clientWidth, canvasContainer.clientHeight);
+            canvasContainer.appendChild(renderer.domElement);
+
+            labelRenderer = new THREE.CSS2DRenderer();
+            labelRenderer.setSize(canvasContainer.clientWidth, canvasContainer.clientHeight);
+            labelContainer.appendChild(labelRenderer.domElement);
+
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+
+            scene.add(new THREE.AmbientLight(0x888888));
+            directionalLight = new THREE.DirectionalLight(0xffffff, 2.0);
+            scene.add(directionalLight);
+
+            earth.scale.set(earthRadius, earthRadius, earthRadius);
+            scene.add(earth);
+
+            userArrow = new THREE.ArrowHelper(new THREE.Vector3(0, -1, 0), new THREE.Vector3(0, 0, 0), 0.8, 0xff0000, 0.2, 0.1);
+            earth.add(userArrow);
+
+            createBackground();
+            createLegend();
+            setupEventListeners();
+            animate();
+        }
+
+        function createBackground() {
+            const starsGeometry = new THREE.BufferGeometry();
+            const starsCount = 10000;
+            const posArray = new Float32Array(starsCount * 3);
+            for (let i = 0; i < starsCount; i++) {
+                const radius = 300, theta = 2 * Math.PI * Math.random(), phi = Math.acos(2 * Math.random() - 1);
+                posArray[i * 3] = radius * Math.sin(phi) * Math.cos(theta);
+                posArray[i * 3 + 1] = radius * Math.sin(phi) * Math.sin(theta);
+                posArray[i * 3 + 2] = radius * Math.cos(phi);
+            }
+            starsGeometry.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
+            const starsMaterial = new THREE.PointsMaterial({ size: 0.2, color: 0xffffff });
+            starField = new THREE.Points(starsGeometry, starsMaterial);
+            scene.add(starField);
+
+            const planeGeometry = new THREE.PlaneGeometry(200, 200, 100, 100);
+            planeGeometry.rotateX(-Math.PI / 2);
+            const planeMaterial = new THREE.MeshBasicMaterial({ color: 0x00ffff, wireframe: true, transparent: true, opacity: 0.25 });
+            const gravityGrid = new THREE.Mesh(planeGeometry, planeMaterial);
+            gravityGrid.position.y = -15;
+            scene.add(gravityGrid);
+        }
+
+        function createLegend() {
+            const legendDiv = document.getElementById('legend');
+            const systems = [
+                { name: 'GPS (USA)', flag: '🇺🇸', colorKey: 'GPS' },
+                { name: 'GLONASS (Russ.)', flag: '🇷🇺', colorKey: 'GLONASS' },
+                { name: 'BeiDou (China)', flag: '🇨🇳', colorKey: 'BeiDou' },
+                { name: 'Galileo (EU)', flag: '🇪🇺', colorKey: 'Galileo' },
+                { name: 'Andere', flag: '🛰️', colorKey: 'Other' }
+            ];
+
+            let html = '<strong>Legende</strong><hr style="border-color: #333; margin: 5px 0 8px 0;">';
+            systems.forEach(sys => {
+                const colorHex = getSatColor(sys.colorKey).toString(16).padStart(6, '0');
+                html += `<div style="display: flex; align-items: center; margin-bottom: 5px;">
+                    <span class="legend-flag">${sys.flag}</span>
+                    <div class="legend-color" style="background-color: #${colorHex};"></div>
+                    <span>${sys.name}</span>
+                </div>`;
+            });
+            legendDiv.innerHTML = html;
+        }
+
+        function setupEventListeners() {
+            document.querySelectorAll('.load-btn').forEach(btn => {
+                btn.addEventListener('click', () => loadData(btn.dataset.range));
+            });
+
+            slider.addEventListener('input', (e) => {
+                if (!isPaused) togglePlayPause();
+                updateFrameData(parseInt(e.target.value));
+            });
+            playPauseBtn.addEventListener('click', togglePlayPause);
+            
+            speedSlider.addEventListener('input', (e) => {
+                playbackSpeed = parseInt(e.target.value);
+                speedDisplay.textContent = `${playbackSpeed}x`;
+            });
+            
+            window.addEventListener('resize', onWindowResize, false);
+        }
+
+        function togglePlayPause() {
+            isPaused = !isPaused;
+            playPauseBtn.textContent = isPaused ? "Play" : "Pause";
+            clock.getDelta(); 
+        }
+
+        function getSatColor(system) {
+            if (system.startsWith('G') || system.startsWith('GPS')) return 0x00ff00; // Grün
+            if (system.startsWith('R') || system.startsWith('GLONASS')) return 0xff0000; // Rot
+            if (system.startsWith('C') || system.startsWith('BeiDou')) return 0x0000ff; // Blau
+            if (system.startsWith('E') || system.startsWith('Galileo')) return 0xffff00; // Gelb
+            return 0xffffff; // Weiß
+        }
+        
+        function getFlag(system) {
+            if (system.startsWith('G') || system.startsWith('GPS')) return '🇺🇸';
+            if (system.startsWith('R') || system.startsWith('GLONASS')) return '🇷🇺';
+            if (system.startsWith('C') || system.startsWith('BeiDou')) return '🇨🇳';
+            if (system.startsWith('E') || system.startsWith('Galileo')) return '🇪🇺';
+            return '🛰️';
+        }
+
+        function createSatellite(satData) {
+            const newSatellite = satelliteModel.clone();
+            newSatellite.scale.set(0.1, 0.1, 0.1);
+            newSatellite.visible = false; 
+            
+            const textDiv = document.createElement('div');
+            textDiv.className = 'label-text';
+            textDiv.textContent = satData.id;
+            const label = new THREE.CSS2DObject(textDiv);
+            label.position.set(0, 0.5, 0);
+            newSatellite.add(label);
+            
+            scene.add(newSatellite);
+            
+            const row = satelliteTableBody.insertRow();
+            row.id = `sat-row-${satData.id}`;
+            const colorHex = getSatColor(satData.id).toString(16).padStart(6, '0');
+            
+            row.innerHTML = `
+                <td>${getFlag(satData.id)}</td>
+                <td>${satData.id}</td>
+                <td class="elev">--</td>
+                <td class="azim">--</td>
+                <td><div class="legend-color" style="background-color: #${colorHex};"></div></td>
+            `;
+
+            const satObject = {
+                id: satData.id,
+                mesh: newSatellite,
+                label: label,
+                tableRow: row,
+                targetPosition: new THREE.Vector3(),
+                trailSegments: [],
+                framesSinceDisappeared: 0 
+            };
+            satelliteObjects.set(satData.id, satObject);
+            return satObject;
+        }
+
+        // Bugfix V3.1 (von letzter Nachricht)
+        function removeSatellite(id) {
+            if (satelliteObjects.has(id)) {
+                const so = satelliteObjects.get(id);
+                
+                if (so.label) {
+                    so.mesh.remove(so.label);
+                }
+                scene.remove(so.mesh); 
+                so.trailSegments.forEach(seg => scene.remove(seg.line)); 
+                so.tableRow.remove(); 
+                satelliteObjects.delete(id);
+            }
+        }
+
+        // updateFrameData (Angepasst für leere Frames)
+        function updateFrameData(index) {
+            // NEUER FIX: Wenn index 0 ist UND satelliteData leer ist
+            if (satelliteData.length === 0) {
+                // Setze alles auf Standard-Fallback
+                earth.rotation.y = 0;
+                const userLocalPosition = getPositionFromLatLon(OBSERVER_LAT, OBSERVER_LON, 1);
+                userArrow.position.copy(userLocalPosition);
+                userArrow.setDirection(userLocalPosition.clone().normalize().negate());
+                currentTimeEl.textContent = "--:--:--";
+                progressBar.value = 0;
+                return; // Stoppe hier, es gibt nichts zu zeichnen
+            }
+            
+            if (index < 0 || index >= satelliteData.length) return;
+            const currentFrame = satelliteData[index];
+            
+            // ==========================================================
+            // ===== HIER IST DER BUGFIX (V3.3) FÜR DEN 'map'-FEHLER =====
+            // ==========================================================
+            // Wir prüfen, ob der Frame (und seine .satellites-Eigenschaft)
+            // existiert, bevor wir ihn verwenden.
+            if (!currentFrame || !Array.isArray(currentFrame.satellites)) {
+                // Dieser Fall sollte nicht eintreten, wenn get_data.php V2.2
+                // verwendet wird, aber diese Prüfung macht den Code 100% robust.
+                console.warn(`Frame-Daten für Index ${index} sind ungültig.`, currentFrame);
+                return; // Überspringe diesen Frame
+            }
+            // ==========================================================
+            // ===== ENDE BUGFIX =====
+            // ==========================================================
+
+            earth.rotation.y = getEarthRotationFromDatetime(currentFrame.datetime);
+            const userLocalPosition = getPositionFromLatLon(currentFrame.lat, currentFrame.lon, 1);
+            userArrow.position.copy(userLocalPosition);
+            userArrow.setDirection(userLocalPosition.clone().normalize().negate());
+
+            const userWorldPosition = new THREE.Vector3();
+            userArrow.getWorldPosition(userWorldPosition);
+            directionalLight.position.copy(userWorldPosition).normalize().multiplyScalar(50);
+
+            currentTimeEl.textContent = currentFrame.datetime;
+            progressBar.value = index;
+            
+            // Diese Zeile (620) hat den Fehler verursacht
+            const frameSatellites = new Map(currentFrame.satellites.map(s => [s.id, s]));
+            
+            frameSatellites.forEach(satData => {
+                let so = satelliteObjects.get(satData.id);
+
+                if (satData.elev <= 0) {
+                    if (so) removeSatellite(satData.id); 
+                    return; 
+                }
+
+                if (!so) {
+                    so = createSatellite(satData);
+                }
+                
+                so.mesh.visible = true;
+                so.targetPosition.copy(calculateSatellitePosition(userWorldPosition, satData));
+                so.label.element.textContent = satData.id;
+                
+                if (so.framesSinceDisappeared > DROPOUT_TOLERANCE_FRAMES) {
+                    const trailPoints = [];
+                    const trailGeometry = new THREE.BufferGeometry().setFromPoints(trailPoints);
+                    const trailMaterial = new THREE.LineBasicMaterial({ color: getSatColor(satData.id), transparent: true, opacity: 0.5 });
+                    const trailLine = new THREE.Line(trailGeometry, trailMaterial);
+                    scene.add(trailLine);
+                    so.trailSegments.push({ points: trailPoints, line: trailLine });
+                }
+                so.framesSinceDisappeared = 0;
+                
+                if (so.trailSegments.length === 0) {
+                    const trailPoints = [];
+                    const trailGeometry = new THREE.BufferGeometry().setFromPoints(trailPoints);
+                    const trailMaterial = new THREE.LineBasicMaterial({ color: getSatColor(satData.id), transparent: true, opacity: 0.5 });
+                    const trailLine = new THREE.Line(trailGeometry, trailMaterial);
+                    scene.add(trailLine);
+                    so.trailSegments.push({ points: trailPoints, line: trailLine });
+                }
+                
+                const currentSegment = so.trailSegments[so.trailSegments.length - 1];
+                currentSegment.points.push(so.targetPosition.clone());
+                if (currentSegment.points.length > maxTrailPoints && maxTrailPoints < 10000) {
+                    currentSegment.points.shift();
+                }
+
+                so.tableRow.querySelector('.elev').textContent = `${satData.elev}°`;
+                so.tableRow.querySelector('.azim').textContent = `${satData.azim}°`;
+            });
+            
+            satelliteObjects.forEach(so => {
+                if (!frameSatellites.has(so.id)) {
+                    so.framesSinceDisappeared++;
+                    if (so.framesSinceDisappeared > DROPOUT_TOLERANCE_FRAMES) {
+                         so.mesh.visible = false;
+                         so.label.visible = false;
+                         so.tableRow.style.color = '#777'; 
+                    }
+                } else {
+                    so.tableRow.style.color = '#ddd';
+                }
+            });
+        }
+
+        // ... (animate(), onWindowResize() - Unverändert) ...
+        function animate() {
+            requestAnimationFrame(animate);
+            if (!isPaused) controls.update(); 
+
+            const deltaTime = clock.getDelta();
+
+            if (!isPaused && satelliteData.length > 0) {
+                timeAccumulator += deltaTime;
+                const timePerFrame = 1.0 / playbackSpeed; 
+
+                while (timeAccumulator >= timePerFrame) {
+                    timeAccumulator -= timePerFrame;
+                    let newIndex = parseInt(slider.value) + 1;
+                    if (newIndex >= satelliteData.length) {
+                        newIndex = 0; 
+                    }
+                    slider.value = newIndex; 
+                    updateFrameData(newIndex); 
+                }
+            }
+
+            satelliteObjects.forEach(so => {
+                so.label.visible = so.mesh.visible;
+                if (so.mesh.visible) {
+                    so.mesh.position.lerp(so.targetPosition, 15 * deltaTime);
+                    so.mesh.lookAt(earth.position);
+                    so.mesh.rotateY(THREE.MathUtils.degToRad(-90));
+                }
+                so.trailSegments.forEach(seg => {
+                    seg.line.visible = seg.points.length > 1;
+                    if (seg.line.visible) {
+                        seg.line.geometry.setFromPoints(seg.points);
+                    }
+                });
+            });
+
+            if (starField) starField.rotation.y += 0.00005;
+
+            renderer.render(scene, camera);
+            labelRenderer.render(scene, camera);
+        }
+
+        function onWindowResize() {
+            camera.aspect = canvasContainer.clientWidth / canvasContainer.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(canvasContainer.clientWidth, canvasContainer.clientHeight);
+            labelRenderer.setSize(canvasContainer.clientWidth, canvasContainer.clientHeight);
+        }
+        
+        loadDataAndModels();
+
+    </script>
+</body>
+</html>

@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <title>Orbit-Visualisierung mit Satelliten-Liste</title>
+    <link rel="icon" href="data:;base64,iVBORw0KGgo="> <!-- Fix für favicon-404 -->
+    <style>
+        body {
+            margin: 0;
+            background-color: #000;
+            color: #fff;
+            font-family: Arial, sans-serif;
+            overflow: hidden;
+            display: flex;
+            height: 100vh;
+        }
+
+        #main-container {
+            display: flex;
+            flex-grow: 1;
+            overflow: hidden;
+        }
+
+        #canvas-container {
+            flex-grow: 1;
+            position: relative;
+            cursor: grab;
+        }
+
+        #loader {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 200;
+            color: #00ffff;
+            font-size: 1.2em;
+            text-align: center;
+            padding: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            border-radius: 8px;
+        }
+
+        #orbit-clock {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            color: white;
+            font-size: 2em;
+            background: rgba(0,0,0,0.5);
+            padding: 10px;
+            border-radius: 5px;
+        }
+
+        #satellite-list {
+            width: 300px;
+            flex-shrink: 0;
+            background-color: rgba(10, 20, 30, 0.8);
+            border-left: 1px solid #00ffff;
+            padding: 15px;
+            box-sizing: border-box;
+            overflow-y: auto;
+        }
+
+        #satellite-list h3 {
+            margin-top: 0;
+            text-align: center;
+            color: #00ffff;
+            text-shadow: 0 0 2px #00ffff;
+        }
+
+        #satellite-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+
+        #satellite-table th,
+        #satellite-table td {
+            padding: 8px;
+            text-align: left;
+            border-bottom: 1px solid #555;
+        }
+
+        #satellite-table th {
+            color: #00ffff;
+        }
+
+        .color-swatch {
+            width: 20px;
+            height: 20px;
+            display: inline-block;
+            border: 1px solid #fff;
+            vertical-align: middle;
+        }
+    </style>
+</head>
+<body>
+    <div id="main-container">
+        <div id="canvas-container">
+            <div id="loader">Lade 3D-Modelle und berechne Orbits...</div>
+            <div id="orbit-clock">00:00:00</div>
+        </div>
+
+        <div id="satellite-list">
+            <h3>Satelliten-Übersicht</h3>
+            <table id="satellite-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Herkunft</th>
+                        <th>Farbe</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script>
+        let scene, camera, renderer, controls, earth, satelliteModel;
+        let animatedSatellites = [];
+        let clock = new THREE.Clock();
+        const playbackSpeed = 1000; // Hohe Geschwindigkeit für sichtbare Bewegung
+
+        // Funktion zur Bestimmung der Herkunft und Farbe basierend auf Satelliten-ID
+        function getSatInfo(satId) {
+            const prefix = satId.charAt(0);
+            let origin = 'Unbekannt';
+            let color = 0xffffff; // Weiß als Default
+
+            switch (prefix) {
+                case 'G':
+                    origin = 'GPS (USA)';
+                    color = 0x00ff00; // Grün
+                    break;
+                case 'R':
+                    origin = 'GLONASS (Russland)';
+                    color = 0xff0000; // Rot
+                    break;
+                case 'C':
+                    origin = 'BeiDou (China)';
+                    color = 0x0000ff; // Blau
+                    break;
+                case 'E':
+                    origin = 'Galileo (EU)';
+                    color = 0xffff00; // Gelb
+                    break;
+                default:
+                    origin = 'Andere';
+                    color = 0xffffff; // Weiß
+            }
+
+            return { origin, color };
+        }
+
+        async function init() {
+            console.log('Init gestartet...'); // Debug
+            document.getElementById('loader').style.display = 'block';
+
+            scene = new THREE.Scene();
+            const container = document.getElementById('canvas-container');
+            camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, 1000);
+            camera.position.set(0, 20, 40); // Weiter weg für bessere Übersicht
+            
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(container.clientWidth, container.clientHeight);
+            container.appendChild(renderer.domElement);
+
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+
+            scene.add(new THREE.AmbientLight(0x888888));
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 1.5);
+            directionalLight.position.set(10, 20, 30);
+            scene.add(directionalLight);
+            
+            const gltfLoader = new THREE.GLTFLoader();
+            try {
+                const earthGltf = await gltfLoader.loadAsync('earth.glb');
+                console.log('Earth geladen'); // Debug
+                const satelliteGltf = await gltfLoader.loadAsync('satellite.glb');
+                console.log('Satellite geladen'); // Debug
+                const orbitData = await fetch('get_orbit.php').then(res => {
+                    if (!res.ok) throw new Error('Fetch-Fehler bei get_orbit.php: ' + res.status);
+                    return res.json();
+                });
+                console.log('Orbit-Daten geladen', orbitData); // Debug
+
+                const earthRadius = 5;
+                earth = earthGltf.scene;
+                earth.scale.set(earthRadius, earthRadius, earthRadius);
+                scene.add(earth);
+                
+                satelliteModel = satelliteGltf.scene;
+                
+                const globalStartTime = Math.min(...orbitData.map(o => o.start_time));
+                const satelliteTableBody = document.querySelector('#satellite-table tbody');
+
+                orbitData.forEach(orbit => {
+                    const satInfo = getSatInfo(orbit.id);
+                    const satMesh = satelliteModel.clone();
+                    satMesh.scale.set(0.1, 0.1, 0.1);
+                    
+                    const startPoint = new THREE.Vector3(orbit.point_on_orbit.x, orbit.point_on_orbit.y, orbit.point_on_orbit.z);
+                    const normal = new THREE.Vector3(orbit.normal.x, orbit.normal.y, orbit.normal.z).normalize();
+                    
+                    animatedSatellites.push({
+                        mesh: satMesh,
+                        startPoint: startPoint,
+                        normal: normal,
+                        angularVelocity: orbit.angular_velocity,
+                        startTimeOffset: orbit.start_time - globalStartTime
+                    });
+                    
+                    scene.add(satMesh);
+                    
+                    // Maßstabsgetreuer Orbit-Kreis in der Farbe des Satelliten
+                    const orbitRadius = earthRadius * ((6371 + 20200) / 6371);
+                    const circleGeometry = new THREE.RingGeometry(orbitRadius - 0.05, orbitRadius, 128);
+                    const circleMaterial = new THREE.MeshBasicMaterial({ 
+                        color: satInfo.color, 
+                        side: THREE.DoubleSide, 
+                        transparent: true, 
+                        opacity: 0.3 
+                    });
+                    const orbitCircle = new THREE.Mesh(circleGeometry, circleMaterial);
+                    orbitCircle.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), normal);
+                    scene.add(orbitCircle);
+
+                    // Füge zur Liste hinzu
+                    const row = satelliteTableBody.insertRow();
+                    const colorHex = satInfo.color.toString(16).padStart(6, '0');
+                    row.innerHTML = `
+                        <td>${orbit.id}</td>
+                        <td>${satInfo.origin}</td>
+                        <td><span class="color-swatch" style="background-color: #${colorHex};"></span> #${colorHex}</td>
+                    `;
+                });
+                
+                document.getElementById('loader').style.display = 'none';
+                console.log('Init abgeschlossen'); // Debug
+                animate();
+            } catch (error) {
+                console.error('Fehler in init:', error); // Zeigt den genauen Fehler
+                document.getElementById('loader').textContent = 'Fehler beim Laden: ' + error.message;
+            }
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const elapsedTime = clock.getElapsedTime() * playbackSpeed;
+            
+            animatedSatellites.forEach(sat => {
+                const timeSinceStart = elapsedTime - sat.startTimeOffset;
+                if (timeSinceStart > 0) {
+                    const angle = timeSinceStart * sat.angularVelocity;
+                    sat.mesh.position.copy(sat.startPoint).applyAxisAngle(sat.normal, angle);
+                    sat.mesh.lookAt(earth.position);
+                }
+            });
+            
+            const totalSeconds = Math.floor(elapsedTime) % 86400;
+            const hours = String(Math.floor(totalSeconds / 3600)).padStart(2, '0');
+            const minutes = String(Math.floor((totalSeconds % 3600) / 60)).padStart(2, '0');
+            const seconds = String(totalSeconds % 60).padStart(2, '0');
+            document.getElementById('orbit-clock').textContent = `${hours}:${minutes}:${seconds}`;
+
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('resize', () => {
+            const container = document.getElementById('canvas-container');
+            camera.aspect = container.clientWidth / container.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(container.clientWidth, container.clientHeight);
+        }, false);
+
+        init();
+    </script>
+</body>
+</html>
